@@ -5,7 +5,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserUpdate
 
 
@@ -71,3 +71,24 @@ def list_users(db: Session, email: str | None, role: str | None) -> list[User]:
     query = select(User).order_by(User.created_at.desc())
     query = _apply_user_filters(query, email, role)
     return list(db.scalars(query).all())
+
+
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.scalar(select(User).where(User.email == email))
+
+
+def ensure_admin_user(db: Session, email: str, password: str, full_name: str) -> User:
+    existing = get_user_by_email(db, email)
+    if existing is not None:
+        return existing
+    user = User(
+        email=email,
+        password_hash=hash_password(password),
+        full_name=full_name,
+        role=UserRole.admin,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

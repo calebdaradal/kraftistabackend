@@ -3,7 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_roles
 from app.db.session import get_db
+from app.models.user import User, UserRole
 from app.schemas.product import ProductCreate, ProductRead, ProductUpdate
 from app.services.products import (
     create_product,
@@ -17,7 +19,11 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 
 @router.post("", response_model=ProductRead, status_code=201)
-def create_product_endpoint(payload: ProductCreate, db: Session = Depends(get_db)) -> ProductRead:
+def create_product_endpoint(
+    payload: ProductCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> ProductRead:
     product = create_product(db, payload)
     return ProductRead.model_validate(product)
 
@@ -29,14 +35,23 @@ def get_product_endpoint(product_id: uuid.UUID, db: Session = Depends(get_db)) -
 
 
 @router.patch("/{product_id}", response_model=ProductRead)
-def update_product_endpoint(product_id: uuid.UUID, payload: ProductUpdate, db: Session = Depends(get_db)) -> ProductRead:
+def update_product_endpoint(
+    product_id: uuid.UUID,
+    payload: ProductUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> ProductRead:
     product = get_product_or_404(db, product_id)
     updated = update_product(db, product, payload)
     return ProductRead.model_validate(updated)
 
 
 @router.delete("/{product_id}", response_model=ProductRead)
-def delete_product_endpoint(product_id: uuid.UUID, db: Session = Depends(get_db)) -> ProductRead:
+def delete_product_endpoint(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> ProductRead:
     product = get_product_or_404(db, product_id)
     updated = soft_delete_product(db, product)
     return ProductRead.model_validate(updated)

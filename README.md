@@ -1,6 +1,6 @@
 # Kraftista FastAPI Backend
 
-Simple FastAPI backend for `users` and `products` using Supabase Postgres.
+Simple FastAPI backend for users, products, auth, cart, and orders using Supabase Postgres.
 
 ## 1) Setup
 
@@ -31,7 +31,7 @@ uvicorn app.main:app --reload
 Render start command:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## 4) Endpoints
@@ -42,12 +42,22 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
   - `GET /api/users/{user_id}`
   - `PATCH /api/users/{user_id}`
   - `GET /api/users?email=&role=`
+- Auth:
+  - `POST /api/auth/register`
+  - `POST /api/auth/login`
+  - `GET /api/auth/me`
 - Products:
   - `POST /api/products`
   - `GET /api/products/{product_id}`
   - `PATCH /api/products/{product_id}`
   - `DELETE /api/products/{product_id}` (soft delete via `active=false`)
   - `GET /api/products?category=&active=&q=`
+- Customer:
+  - `GET /api/customer/cart`
+  - `POST /api/customer/cart/items`
+  - `DELETE /api/customer/cart/items/{item_id}`
+  - `POST /api/customer/checkout`
+  - `GET /api/customer/orders`
 
 ## 5) Example payloads
 
@@ -70,6 +80,15 @@ Create user:
 }
 ```
 
+Login:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "strong-password"
+}
+```
+
 Create product:
 
 ```json
@@ -83,4 +102,30 @@ Create product:
   "tags": ["ceramic", "kitchen"],
   "materials": ["clay", "glaze"]
 }
+```
+
+## 6) Security Notes
+
+- Transport security should use HTTPS/TLS in production (Render handles this at the edge).
+- Passwords are stored hashed (`bcrypt` via passlib), not plaintext.
+- Use a strong `JWT_SECRET_KEY` in environment variables.
+- Do not commit `.env` or secrets.
+
+## 7) Admin Bootstrap
+
+If `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set, the app creates the first admin account at startup if it does not exist.
+
+## 8) Render + Supabase
+
+- Use Supabase pooler URI (`port 6543`) with `sslmode=require`.
+- Render Build Command:
+
+```bash
+pip install -r requirements.txt
+```
+
+- Render Start Command:
+
+```bash
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
