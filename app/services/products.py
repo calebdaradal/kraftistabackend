@@ -62,8 +62,6 @@ def list_products(db: Session, category: str | None, active: bool | None, search
     return list(db.scalars(query).all())
 
 
-def soft_delete_product(db: Session, product: Product) -> Product:
-    product.active = False
+def delete_product(db: Session, product: Product) -> None:
+    db.delete(product)
     db.commit()
-    db.refresh(product)
-    return product
