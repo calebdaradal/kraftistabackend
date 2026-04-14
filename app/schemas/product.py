@@ -25,6 +25,9 @@ class ProductBase(BaseModel):
     weight: Decimal | None = Field(default=None, ge=0)
     materials: list[str] | None = None
     care_instructions: list[str] | None = None
+    primary_variation: dict | None = None
+    secondary_variation: dict | None = None
+    tertiary_variation: dict | None = None
 
 
 class ProductCreate(ProductBase):
@@ -51,6 +54,9 @@ class ProductUpdate(BaseModel):
     weight: Decimal | None = Field(default=None, ge=0)
     materials: list[str] | None = None
     care_instructions: list[str] | None = None
+    primary_variation: dict | None = None
+    secondary_variation: dict | None = None
+    tertiary_variation: dict | None = None
 
 
 class ProductRead(BaseModel):
@@ -76,5 +82,8 @@ class ProductRead(BaseModel):
     weight: Decimal | None
     materials: list[str] | None
     care_instructions: list[str] | None
+    primary_variation: dict | None
+    secondary_variation: dict | None
+    tertiary_variation: dict | None
     created_at: datetime
     updated_at: datetime

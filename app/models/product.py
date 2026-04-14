@@ -39,6 +39,9 @@ class Product(Base):
     weight: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
     materials: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     care_instructions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    primary_variation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    secondary_variation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    tertiary_variation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
