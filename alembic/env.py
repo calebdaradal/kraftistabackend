@@ -1,7 +1,14 @@
 from logging.config import fileConfig
+from pathlib import Path
+import sys
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+# Ensure `app` is importable in environments like Render build steps.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.config import get_settings
 from app.db.base import Base
@@ -13,7 +20,17 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+
+def _normalize_database_url(raw_url: str) -> str:
+    if raw_url.startswith("postgresql://") and "+psycopg" not in raw_url:
+        return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if raw_url.startswith("postgres://"):
+        return raw_url.replace("postgres://", "postgresql+psycopg://", 1)
+    return raw_url
+
+
+config.set_main_option("sqlalchemy.url", _normalize_database_url(settings.database_url))
 target_metadata = Base.metadata
 
 
