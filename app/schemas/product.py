@@ -11,6 +11,7 @@ class ProductBase(BaseModel):
     short_description: str | None = None
     full_description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    featured: bool = False
     active: bool = True
     price: Decimal = Field(ge=0)
     original_price: Decimal | None = Field(default=None, ge=0)
@@ -40,6 +41,7 @@ class ProductUpdate(BaseModel):
     short_description: str | None = None
     full_description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    featured: bool | None = None
     active: bool | None = None
     price: Decimal | None = Field(default=None, ge=0)
     original_price: Decimal | None = Field(default=None, ge=0)
@@ -68,6 +70,7 @@ class ProductRead(BaseModel):
     short_description: str | None
     full_description: str | None
     category: str | None
+    featured: bool
     active: bool
     price: Decimal
     original_price: Decimal | None
@@ -87,3 +90,49 @@ class ProductRead(BaseModel):
     tertiary_variation: dict | None
     created_at: datetime
     updated_at: datetime
+
+
+class TaxonomyBase(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class CategoryCreate(TaxonomyBase):
+    pass
+
+
+class CategoryUpdate(TaxonomyBase):
+    pass
+
+
+class CategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    product_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class TagUpdate(TagCreate):
+    pass
+
+
+class TagRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    product_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaxonomyDeleteImpact(BaseModel):
+    product_count: int
