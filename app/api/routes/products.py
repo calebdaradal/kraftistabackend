@@ -50,35 +50,6 @@ def create_product_endpoint(
     return ProductRead.model_validate(serialize_product(product))
 
 
-@router.get("/{product_id}", response_model=ProductRead)
-def get_product_endpoint(product_id: uuid.UUID, db: Session = Depends(get_db)) -> ProductRead:
-    product = get_product_or_404(db, product_id)
-    return ProductRead.model_validate(serialize_product(product))
-
-
-@router.patch("/{product_id}", response_model=ProductRead)
-def update_product_endpoint(
-    product_id: uuid.UUID,
-    payload: ProductUpdate,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
-) -> ProductRead:
-    product = get_product_or_404(db, product_id)
-    updated = update_product(db, product, payload)
-    return ProductRead.model_validate(serialize_product(updated))
-
-
-@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_product_endpoint(
-    product_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
-) -> Response:
-    product = get_product_or_404(db, product_id)
-    delete_product(db, product)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @router.get("", response_model=list[ProductRead])
 def list_products_endpoint(
     category: str | None = Query(default=None),
@@ -246,4 +217,33 @@ def delete_tag_endpoint(
     _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> Response:
     delete_tag(db, tag_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{product_id}", response_model=ProductRead)
+def get_product_endpoint(product_id: uuid.UUID, db: Session = Depends(get_db)) -> ProductRead:
+    product = get_product_or_404(db, product_id)
+    return ProductRead.model_validate(serialize_product(product))
+
+
+@router.patch("/{product_id}", response_model=ProductRead)
+def update_product_endpoint(
+    product_id: uuid.UUID,
+    payload: ProductUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> ProductRead:
+    product = get_product_or_404(db, product_id)
+    updated = update_product(db, product, payload)
+    return ProductRead.model_validate(serialize_product(updated))
+
+
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product_endpoint(
+    product_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> Response:
+    product = get_product_or_404(db, product_id)
+    delete_product(db, product)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
