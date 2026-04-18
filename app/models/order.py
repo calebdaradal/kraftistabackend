@@ -21,6 +21,8 @@ class Order(Base):
     payment_method: Mapped[str] = mapped_column(String(50), nullable=False, default="card")
     order_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     shipping_address: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    tracking_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     items: Mapped[list["OrderItem"]] = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")

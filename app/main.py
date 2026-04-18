@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.customer import router as customer_router
+from app.api.routes.orders import router as orders_router
 from app.api.routes.products import router as products_router
 from app.api.routes.users import router as users_router
 from app.core.config import get_settings
@@ -31,6 +32,7 @@ app.include_router(users_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(customer_router, prefix="/api")
+app.include_router(orders_router, prefix="/api")
 
 
 @app.on_event("startup")

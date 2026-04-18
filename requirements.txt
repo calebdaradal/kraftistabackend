@@ -2,7 +2,7 @@ fastapi
 uvicorn
 sqlalchemy
 alembic
-psycopg
+psycopg[binary]
 pydantic-settings
 passlib
 bcrypt

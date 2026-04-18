@@ -1,6 +1,19 @@
 from app.models.cart import Cart, CartItem
+from app.models.engagement import ProductLike, ProductReview, UserNotification
 from app.models.order import Order, OrderItem
 from app.models.product import Category, Product, Tag
 from app.models.user import User
 
-__all__ = ["User", "Product", "Category", "Tag", "Cart", "CartItem", "Order", "OrderItem"]
+__all__ = [
+    "User",
+    "Product",
+    "Category",
+    "Tag",
+    "Cart",
+    "CartItem",
+    "Order",
+    "OrderItem",
+    "ProductLike",
+    "ProductReview",
+    "UserNotification",
+]

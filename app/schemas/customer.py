@@ -58,5 +58,51 @@ class OrderRead(BaseModel):
     payment_method: str
     order_note: str | None
     shipping_address: dict[str, str]
+    tracking_reference: str | None
+    delivered_at: datetime | None
     created_at: datetime
     items: list[OrderItemRead]
+
+
+class ProductLikeRead(BaseModel):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    created_at: datetime
+
+
+class ProductLikeCreate(BaseModel):
+    product_id: uuid.UUID
+
+
+class PendingReviewItemRead(BaseModel):
+    order_id: uuid.UUID
+    order_item_id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str
+    image_url: str | None
+    delivered_at: datetime | None
+
+
+class ProductReviewCreate(BaseModel):
+    order_item_id: uuid.UUID
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = None
+
+
+class ProductReviewRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    order_item_id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str
+    image_url: str | None
+    rating: int
+    comment: str | None
+    moderation_status: str
+    moderation_note: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReviewNotificationRead(BaseModel):
+    pending_count: int
