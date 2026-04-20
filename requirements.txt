@@ -9,3 +9,4 @@ bcrypt
 python-jose
 python-dotenv
 email-validator
+python-multipart
