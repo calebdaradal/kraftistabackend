@@ -14,3 +14,7 @@ class UpsertSiteSettingsRequest(BaseModel):
 class FaviconUploadResponse(BaseModel):
     favicon_url: str
 
+
+class LogoUploadResponse(BaseModel):
+    logo_url: str
+

@@ -41,6 +41,11 @@ app.include_router(products_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(customization_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+# Compatibility for deployments/proxies that already strip "/api" before forwarding.
+# This keeps settings endpoints (including logo/favicon uploads) reachable at:
+# - /api/settings/...
+# - /settings/...
+app.include_router(settings_router)
 app.include_router(customer_router, prefix="/api")
 app.include_router(orders_router, prefix="/api")
 
