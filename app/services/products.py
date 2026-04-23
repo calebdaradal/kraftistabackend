@@ -1,6 +1,7 @@
 import uuid
 from dataclasses import dataclass
 from re import sub
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import Select, func, or_, select
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.product import Category, Product, Tag
 from app.schemas.product import ProductCreate, ProductUpdate
+from app.core.config import get_settings
+from app.services.storage import create_signed_url_from_uri, is_data_url, is_supabase_uri, upload_data_url
 
 
 @dataclass
@@ -66,6 +69,29 @@ def _get_or_create_tags(db: Session, tag_names: list[str] | None) -> list[Tag]:
 
 
 def serialize_product(product: Product) -> dict:
+    settings = get_settings()
+
+    def _resolve_media(value: str | None) -> str | None:
+        if not value:
+            return value
+        if is_supabase_uri(value):
+            return create_signed_url_from_uri(value, settings.supabase_signed_url_exp_seconds)
+        return value
+
+    def _resolve_variation_media(node: Any) -> Any:
+        if isinstance(node, list):
+            return [_resolve_variation_media(item) for item in node]
+        if isinstance(node, dict):
+            resolved = {}
+            for key, val in node.items():
+                if key == "image" and isinstance(val, str):
+                    resolved[key] = _resolve_media(val)
+                else:
+                    resolved[key] = _resolve_variation_media(val)
+            return resolved
+        return node
+
+    gallery = product.gallery_urls or []
     return {
         "id": product.id,
         "name": product.name,
@@ -79,8 +105,8 @@ def serialize_product(product: Product) -> dict:
         "original_price": product.original_price,
         "in_stock": product.in_stock,
         "stock_count": product.stock_count,
-        "image_url": product.image_url,
-        "gallery_urls": product.gallery_urls,
+        "image_url": _resolve_media(product.image_url),
+        "gallery_urls": [_resolve_media(item) for item in gallery],
         "tags": [tag.name for tag in product.tags_ref],
         "rating": product.rating,
         "review_count": product.review_count,
@@ -90,9 +116,9 @@ def serialize_product(product: Product) -> dict:
         "weight_kg": product.weight_kg,
         "materials": product.materials,
         "care_instructions": product.care_instructions,
-        "primary_variation": product.primary_variation,
-        "secondary_variation": product.secondary_variation,
-        "tertiary_variation": product.tertiary_variation,
+        "primary_variation": _resolve_variation_media(product.primary_variation),
+        "secondary_variation": _resolve_variation_media(product.secondary_variation),
+        "tertiary_variation": _resolve_variation_media(product.tertiary_variation),
         "created_at": product.created_at,
         "updated_at": product.updated_at,
     }
@@ -118,7 +144,7 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     if db.scalar(select(Product).where(Product.sku == payload.sku)) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SKU already exists.")
 
-    values = payload.model_dump()
+    values = _normalize_media_payload(payload.model_dump())
     tag_names = values.pop("tags", None)
     category_name = values.pop("category", None)
     product = Product(**values)
@@ -142,7 +168,7 @@ def get_product_or_404(db: Session, product_id: uuid.UUID) -> Product:
 
 
 def update_product(db: Session, product: Product, payload: ProductUpdate) -> Product:
-    update_data = payload.model_dump(exclude_unset=True)
+    update_data = _normalize_media_payload(payload.model_dump(exclude_unset=True))
     tag_names = update_data.pop("tags", None) if "tags" in update_data else None
     category_name = update_data.pop("category", None) if "category" in update_data else None
 
@@ -169,6 +195,45 @@ def list_products(
     query = select(Product).options(selectinload(Product.category_ref), selectinload(Product.tags_ref)).order_by(Product.created_at.desc())
     query = _apply_product_filters(query, category, active, search, featured)
     return list(db.scalars(query).all())
+
+
+def _normalize_media_payload(data: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
+    bucket = settings.supabase_bucket_product_images
+
+    def _persist_image(value: str | None, folder: str) -> str | None:
+        if not isinstance(value, str):
+            return value
+        if is_data_url(value):
+            return upload_data_url(bucket=bucket, data_url=value, folder=folder)
+        return value
+
+    data["image_url"] = _persist_image(data.get("image_url"), "products/main")
+    if isinstance(data.get("gallery_urls"), list):
+        data["gallery_urls"] = [
+            _persist_image(item, "products/gallery") if isinstance(item, str) else item for item in data["gallery_urls"]
+        ]
+
+    def _walk_variation_media(node: Any) -> Any:
+        if isinstance(node, list):
+            return [_walk_variation_media(item) for item in node]
+        if isinstance(node, dict):
+            mapped = {}
+            for key, val in node.items():
+                if key == "image" and isinstance(val, str):
+                    mapped[key] = _persist_image(val, "products/variations")
+                else:
+                    mapped[key] = _walk_variation_media(val)
+            return mapped
+        return node
+
+    if "primary_variation" in data:
+        data["primary_variation"] = _walk_variation_media(data.get("primary_variation"))
+    if "secondary_variation" in data:
+        data["secondary_variation"] = _walk_variation_media(data.get("secondary_variation"))
+    if "tertiary_variation" in data:
+        data["tertiary_variation"] = _walk_variation_media(data.get("tertiary_variation"))
+    return data
 
 
 def delete_product(db: Session, product: Product) -> None:
