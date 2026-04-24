@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.deps import require_roles
 from app.core.config import get_settings as get_app_config
@@ -26,8 +27,9 @@ def _upsert_settings(db: Session, data: Any, user_id: str | None) -> None:
     if existing is None:
         db.add(SiteSetting(key=SETTINGS_KEY, data=data, updated_by=user_id))
         return
-    existing.data = data  # type: ignore[assignment]
+    existing.data = dict(data)  # type: ignore[assignment]
     existing.updated_by = user_id  # type: ignore[assignment]
+    flag_modified(existing, "data")
 
 
 def _public_asset_url(asset_kind: str, version: int | None) -> str:
@@ -95,7 +97,7 @@ def upload_favicon(
         content_type=file.content_type,
     )
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
-    current: dict[str, Any] = row.data if row else {}
+    current: dict[str, Any] = dict(row.data) if row else {}
     version = (current.get("faviconVersion") or 0) + 1
     current["faviconPath"] = storage_uri
     current["faviconVersion"] = version
@@ -137,7 +139,7 @@ def upload_logo(
         content_type=file.content_type,
     )
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
-    current: dict[str, Any] = row.data if row else {}
+    current: dict[str, Any] = dict(row.data) if row else {}
     version = (current.get("logoVersion") or 0) + 1
     current["logoPath"] = storage_uri
     current["logoVersion"] = version
