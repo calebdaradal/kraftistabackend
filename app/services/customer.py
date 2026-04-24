@@ -20,8 +20,9 @@ def _sanitize_image_url(image_url: str | None) -> str | None:
     trimmed = image_url.strip()
     if not trimmed:
         return None
-    # DB column is VARCHAR(512); drop oversized payloads (e.g. base64 data URLs) instead of 500.
-    if len(trimmed) > 512:
+    # Reject base64 data URLs — they are too large for the DB column.
+    # Allow all http(s) URLs regardless of length (column is now TEXT).
+    if trimmed.startswith("data:"):
         return None
     return trimmed
 
