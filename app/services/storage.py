@@ -107,3 +107,14 @@ def download_bytes_from_uri(uri: str) -> bytes:
     bucket, path = parse_supabase_uri(uri)
     return get_storage_client().storage.from_(bucket).download(path)
 
+
+def delete_file_from_uri(uri: str) -> None:
+    """Best-effort deletion — does not raise if file is missing."""
+    try:
+        if not is_supabase_uri(uri):
+            return
+        bucket, path = parse_supabase_uri(uri)
+        get_storage_client().storage.from_(bucket).remove([path])
+    except Exception:
+        pass
+

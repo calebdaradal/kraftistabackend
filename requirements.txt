@@ -11,3 +11,4 @@ python-dotenv
 email-validator
 python-multipart
 supabase
+websockets>=14.0,<16.0

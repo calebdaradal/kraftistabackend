@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class SiteCustomizationResponse(BaseModel):
     about: Any | None = None
     footer: Any | None = None
+    hero: Any | None = None
 
 
 class UpsertCustomizationRequest(BaseModel):

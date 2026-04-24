@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.settings import SiteSetting
 from app.models.user import User, UserRole
 from app.schemas.settings import FaviconUploadResponse, LogoUploadResponse, SiteSettingsResponse, UpsertSiteSettingsRequest
-from app.services.storage import download_bytes_from_uri, is_supabase_uri, upload_bytes
+from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_supabase_uri, upload_bytes
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -47,6 +47,9 @@ def get_settings(db: Session = Depends(get_db)) -> SiteSettingsResponse:
         data["faviconUrl"] = _public_asset_url("favicon", data.get("faviconVersion"))
     if data.get("logoPath"):
         data["logoUrl"] = _public_asset_url("logo", data.get("logoVersion"))
+    # Expose whether undo is available (don't expose actual storage URIs)
+    data["hasLogoPrevious"] = bool(data.get("logoPreviousPath"))
+    data["hasFaviconPrevious"] = bool(data.get("faviconPreviousPath"))
     return SiteSettingsResponse(data=data)
 
 
@@ -96,12 +99,56 @@ def upload_favicon(
         folder="favicon",
         content_type=file.content_type,
     )
+
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     current: dict[str, Any] = dict(row.data) if row else {}
+
+    # Rotate: delete old "previous", promote current → previous
+    old_previous = current.get("faviconPreviousPath")
+    if old_previous:
+        delete_file_from_uri(old_previous)
+
+    current["faviconPreviousPath"] = current.get("faviconPath")
+    current["faviconPreviousVersion"] = current.get("faviconVersion")
+
     version = (current.get("faviconVersion") or 0) + 1
     current["faviconPath"] = storage_uri
     current["faviconVersion"] = version
     current["faviconUrl"] = _public_asset_url("favicon", version)
+
+    _upsert_settings(db, current, str(current_user.id))
+    db.commit()
+
+    return FaviconUploadResponse(favicon_url=current["faviconUrl"])
+
+
+@router.post("/favicon/undo", response_model=FaviconUploadResponse)
+def undo_favicon(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> FaviconUploadResponse:
+    row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No settings found.")
+
+    current: dict[str, Any] = dict(row.data)
+    previous_path = current.get("faviconPreviousPath")
+    if not previous_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No previous favicon to restore.")
+
+    # Delete the current (new) image
+    current_path = current.get("faviconPath")
+    if current_path:
+        delete_file_from_uri(current_path)
+
+    # Restore previous
+    version = current.get("faviconPreviousVersion") or (current.get("faviconVersion", 1) - 1) or 1
+    current["faviconPath"] = previous_path
+    current["faviconVersion"] = version
+    current["faviconUrl"] = _public_asset_url("favicon", version)
+    current["faviconPreviousPath"] = None
+    current["faviconPreviousVersion"] = None
+
     _upsert_settings(db, current, str(current_user.id))
     db.commit()
 
@@ -138,12 +185,56 @@ def upload_logo(
         folder="logo",
         content_type=file.content_type,
     )
+
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     current: dict[str, Any] = dict(row.data) if row else {}
+
+    # Rotate: delete old "previous", promote current → previous
+    old_previous = current.get("logoPreviousPath")
+    if old_previous:
+        delete_file_from_uri(old_previous)
+
+    current["logoPreviousPath"] = current.get("logoPath")
+    current["logoPreviousVersion"] = current.get("logoVersion")
+
     version = (current.get("logoVersion") or 0) + 1
     current["logoPath"] = storage_uri
     current["logoVersion"] = version
     current["logoUrl"] = _public_asset_url("logo", version)
+
+    _upsert_settings(db, current, str(current_user.id))
+    db.commit()
+
+    return LogoUploadResponse(logo_url=current["logoUrl"])
+
+
+@router.post("/logo/undo", response_model=LogoUploadResponse)
+def undo_logo(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> LogoUploadResponse:
+    row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No settings found.")
+
+    current: dict[str, Any] = dict(row.data)
+    previous_path = current.get("logoPreviousPath")
+    if not previous_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No previous logo to restore.")
+
+    # Delete the current (new) image
+    current_path = current.get("logoPath")
+    if current_path:
+        delete_file_from_uri(current_path)
+
+    # Restore previous
+    version = current.get("logoPreviousVersion") or (current.get("logoVersion", 1) - 1) or 1
+    current["logoPath"] = previous_path
+    current["logoVersion"] = version
+    current["logoUrl"] = _public_asset_url("logo", version)
+    current["logoPreviousPath"] = None
+    current["logoPreviousVersion"] = None
+
     _upsert_settings(db, current, str(current_user.id))
     db.commit()
 
@@ -196,4 +287,3 @@ def get_favicon_asset(db: Session = Depends(get_db)) -> Response:
         media_type=_content_type_from_uri(favicon_path, "image/x-icon"),
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
-
