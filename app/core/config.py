@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
     jwt_secret_key: str = "change-me"
     jwt_algorithm: str = "HS256"
-    jwt_exp_minutes: int = 60
+    jwt_exp_minutes: int = 10080  # 7 days
     admin_email: str | None = None
     admin_password: str | None = None
     admin_name: str = "Administrator"

@@ -144,10 +144,13 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     if db.scalar(select(Product).where(Product.sku == payload.sku)) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SKU already exists.")
 
-    values = _normalize_media_payload(payload.model_dump())
+    # Pre-generate the product ID so we can use it in organised storage paths
+    # before the DB row is inserted.
+    product_id = uuid.uuid4()
+    values = _normalize_media_payload(payload.model_dump(), str(product_id))
     tag_names = values.pop("tags", None)
     category_name = values.pop("category", None)
-    product = Product(**values)
+    product = Product(id=product_id, **values)
     product.category_ref = _resolve_category(db, category_name)
     product.tags_ref = _get_or_create_tags(db, tag_names)
     db.add(product)
@@ -168,7 +171,7 @@ def get_product_or_404(db: Session, product_id: uuid.UUID) -> Product:
 
 
 def update_product(db: Session, product: Product, payload: ProductUpdate) -> Product:
-    update_data = _normalize_media_payload(payload.model_dump(exclude_unset=True))
+    update_data = _normalize_media_payload(payload.model_dump(exclude_unset=True), str(product.id))
     tag_names = update_data.pop("tags", None) if "tags" in update_data else None
     category_name = update_data.pop("category", None) if "category" in update_data else None
 
@@ -197,9 +200,18 @@ def list_products(
     return list(db.scalars(query).all())
 
 
-def _normalize_media_payload(data: dict[str, Any]) -> dict[str, Any]:
+def _normalize_media_payload(data: dict[str, Any], product_id: str) -> dict[str, Any]:
+    """Upload any base64 data-URLs in the payload to organised Supabase Storage paths.
+
+    Directory layout inside the ``product_images`` bucket::
+
+        products/{product_id}/main/        – primary thumbnail
+        products/{product_id}/gallery/     – gallery images
+        products/{product_id}/variations/{option-slug}/  – per-option design images
+    """
     settings = get_settings()
     bucket = settings.supabase_bucket_product_images
+    base = f"products/{product_id}"
 
     def _persist_image(value: str | None, folder: str) -> str | None:
         if not isinstance(value, str):
@@ -208,20 +220,32 @@ def _normalize_media_payload(data: dict[str, Any]) -> dict[str, Any]:
             return upload_data_url(bucket=bucket, data_url=value, folder=folder)
         return value
 
-    data["image_url"] = _persist_image(data.get("image_url"), "products/main")
+    data["image_url"] = _persist_image(data.get("image_url"), f"{base}/main")
     if isinstance(data.get("gallery_urls"), list):
         data["gallery_urls"] = [
-            _persist_image(item, "products/gallery") if isinstance(item, str) else item for item in data["gallery_urls"]
+            _persist_image(item, f"{base}/gallery") if isinstance(item, str) else item
+            for item in data["gallery_urls"]
         ]
 
     def _walk_variation_media(node: Any) -> Any:
+        """Recursively upload variation option images.
+
+        When the current dict is an *option* (contains both ``label`` and
+        ``image`` keys), the image is stored under
+        ``products/{id}/variations/{slugified-label}/``.
+        """
         if isinstance(node, list):
             return [_walk_variation_media(item) for item in node]
         if isinstance(node, dict):
-            mapped = {}
+            # Derive folder name from the option label if present.
+            raw_label: str = node.get("label", "") if isinstance(node.get("label"), str) else ""
+            opt_slug = _slugify(raw_label) if raw_label else "option"
+            var_folder = f"{base}/variations/{opt_slug}"
+
+            mapped: dict[str, Any] = {}
             for key, val in node.items():
                 if key == "image" and isinstance(val, str):
-                    mapped[key] = _persist_image(val, "products/variations")
+                    mapped[key] = _persist_image(val, var_folder)
                 else:
                     mapped[key] = _walk_variation_media(val)
             return mapped
