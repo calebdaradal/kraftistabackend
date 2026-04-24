@@ -30,7 +30,13 @@ class SellerOrderRead(BaseModel):
     tracking_reference: str | None
     delivered_at: datetime | None
     created_at: datetime
+    refund_requested: bool = False
+    refund_note: str | None = None
     items: list[SellerOrderItemRead]
+
+
+class RefundRequestPayload(BaseModel):
+    refund_note: str | None = Field(default=None, max_length=1000)
 
 
 class SellerOrderTrackingUpdate(BaseModel):

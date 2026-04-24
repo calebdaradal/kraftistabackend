@@ -142,3 +142,10 @@ class TagRead(BaseModel):
 
 class TaxonomyDeleteImpact(BaseModel):
     product_count: int
+
+
+class PublicReviewRead(BaseModel):
+    id: uuid.UUID
+    rating: int
+    comment: str | None
+    created_at: datetime

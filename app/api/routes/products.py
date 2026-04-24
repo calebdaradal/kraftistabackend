@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
+from app.models.engagement import ProductReview
 from app.schemas.product import (
     CategoryCreate,
     CategoryRead,
@@ -13,6 +14,7 @@ from app.schemas.product import (
     ProductCreate,
     ProductRead,
     ProductUpdate,
+    PublicReviewRead,
     TagCreate,
     TagRead,
     TagUpdate,
@@ -218,6 +220,28 @@ def delete_tag_endpoint(
 ) -> Response:
     delete_tag(db, tag_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{product_id}/reviews", response_model=list[PublicReviewRead])
+def list_product_reviews_endpoint(
+    product_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=5, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> list[PublicReviewRead]:
+    from sqlalchemy import select as _select
+
+    offset = (page - 1) * limit
+    rows = list(
+        db.scalars(
+            _select(ProductReview)
+            .where(ProductReview.product_id == product_id, ProductReview.moderation_status == "approved")
+            .order_by(ProductReview.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+    )
+    return [PublicReviewRead(id=r.id, rating=r.rating, comment=r.comment, created_at=r.created_at) for r in rows]
 
 
 @router.get("/{product_id}", response_model=ProductRead)

@@ -12,7 +12,7 @@ from app.core.config import get_settings as get_app_config
 from app.db.session import get_db
 from app.models.settings import SiteSetting
 from app.models.user import User, UserRole
-from app.schemas.settings import FaviconUploadResponse, LogoUploadResponse, SiteSettingsResponse, UpsertSiteSettingsRequest
+from app.schemas.settings import FaviconUploadResponse, LogoUploadResponse, SiteSettingsResponse, UpsertSiteSettingsRequest, WideLogoUploadResponse
 from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_supabase_uri, upload_bytes
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -47,9 +47,12 @@ def get_settings(db: Session = Depends(get_db)) -> SiteSettingsResponse:
         data["faviconUrl"] = _public_asset_url("favicon", data.get("faviconVersion"))
     if data.get("logoPath"):
         data["logoUrl"] = _public_asset_url("logo", data.get("logoVersion"))
+    if data.get("wideLogoPath"):
+        data["wideLogoUrl"] = _public_asset_url("logo/wide", data.get("wideLogoVersion"))
     # Expose whether undo is available (don't expose actual storage URIs)
     data["hasLogoPrevious"] = bool(data.get("logoPreviousPath"))
     data["hasFaviconPrevious"] = bool(data.get("faviconPreviousPath"))
+    data["hasWideLogoPrevious"] = bool(data.get("wideLogoPreviousPath"))
     return SiteSettingsResponse(data=data)
 
 
@@ -266,6 +269,104 @@ def get_logo_asset(db: Session = Depends(get_db)) -> Response:
     logo_path = data.get("logoPath")
     if not logo_path or not is_supabase_uri(logo_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not configured.")
+    content = download_bytes_from_uri(logo_path)
+    return Response(
+        content=content,
+        media_type=_content_type_from_uri(logo_path, "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.post("/logo/wide", response_model=WideLogoUploadResponse)
+def upload_wide_logo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> WideLogoUploadResponse:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing filename.")
+
+    ext = f".{file.filename.rsplit('.', 1)[1].lower()}" if "." in file.filename else ""
+    if ext not in ALLOWED_LOGO_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported logo type. Allowed: {', '.join(sorted(ALLOWED_LOGO_EXTS))}",
+        )
+
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
+    if len(content) > 2_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 2MB).")
+
+    settings = get_app_config()
+    storage_uri = upload_bytes(
+        bucket=settings.supabase_bucket_web_settings,
+        content=content,
+        filename=file.filename,
+        folder="logo/wide",
+        content_type=file.content_type,
+    )
+
+    row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
+    current: dict[str, Any] = dict(row.data) if row else {}
+
+    old_previous = current.get("wideLogoPreviousPath")
+    if old_previous:
+        delete_file_from_uri(old_previous)
+
+    current["wideLogoPreviousPath"] = current.get("wideLogoPath")
+    current["wideLogoPreviousVersion"] = current.get("wideLogoVersion")
+
+    version = (current.get("wideLogoVersion") or 0) + 1
+    current["wideLogoPath"] = storage_uri
+    current["wideLogoVersion"] = version
+    current["wideLogoUrl"] = _public_asset_url("logo/wide", version)
+
+    _upsert_settings(db, current, str(current_user.id))
+    db.commit()
+
+    return WideLogoUploadResponse(wide_logo_url=current["wideLogoUrl"])
+
+
+@router.post("/logo/wide/undo", response_model=WideLogoUploadResponse)
+def undo_wide_logo(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> WideLogoUploadResponse:
+    row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No settings found.")
+
+    current: dict[str, Any] = dict(row.data)
+    previous_path = current.get("wideLogoPreviousPath")
+    if not previous_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No previous wide logo to restore.")
+
+    current_path = current.get("wideLogoPath")
+    if current_path:
+        delete_file_from_uri(current_path)
+
+    version = current.get("wideLogoPreviousVersion") or (current.get("wideLogoVersion", 1) - 1) or 1
+    current["wideLogoPath"] = previous_path
+    current["wideLogoVersion"] = version
+    current["wideLogoUrl"] = _public_asset_url("logo/wide", version)
+    current["wideLogoPreviousPath"] = None
+    current["wideLogoPreviousVersion"] = None
+
+    _upsert_settings(db, current, str(current_user.id))
+    db.commit()
+
+    return WideLogoUploadResponse(wide_logo_url=current["wideLogoUrl"])
+
+
+@router.get("/logo/wide")
+def get_wide_logo_asset(db: Session = Depends(get_db)) -> Response:
+    row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
+    data = row.data if row else {}
+    logo_path = data.get("wideLogoPath")
+    if not logo_path or not is_supabase_uri(logo_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wide logo not configured.")
     content = download_bytes_from_uri(logo_path)
     return Response(
         content=content,

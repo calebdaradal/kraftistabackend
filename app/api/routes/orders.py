@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.schemas.customer import ProductReviewRead
 from app.schemas.orders import (
+    RefundRequestPayload,
     SellerOrderRead,
     SellerOrderStatusUpdate,
     SellerOrderTrackingUpdate,
@@ -40,6 +41,8 @@ def _order_to_read(order) -> SellerOrderRead:
         tracking_reference=order.tracking_reference,
         delivered_at=order.delivered_at,
         created_at=order.created_at,
+        refund_requested=bool(getattr(order, "refund_requested", False)),
+        refund_note=getattr(order, "refund_note", None),
         items=[
             {
                 "id": item.id,
@@ -61,6 +64,84 @@ def list_orders_endpoint(
     db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.admin, UserRole.editor))
 ) -> list[SellerOrderRead]:
     return [_order_to_read(order) for order in list_orders_fifo(db)]
+
+
+# ── Static-segment routes MUST come before /{order_id} to avoid path conflicts ──
+
+@router.get("/refunds", response_model=list[SellerOrderRead])
+def list_refund_requests_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> list[SellerOrderRead]:
+    from sqlalchemy import select as _select
+    from app.models.order import Order as _Order
+    from sqlalchemy.orm import selectinload as _selectinload
+
+    orders = list(
+        db.scalars(
+            _select(_Order)
+            .options(_selectinload(_Order.items))
+            .where(_Order.refund_requested.is_(True))
+            .order_by(_Order.created_at.desc())
+        ).all()
+    )
+    return [_order_to_read(order) for order in orders]
+
+
+@router.get("/reviews/list", response_model=list[ProductReviewRead])
+def list_reviews_endpoint(
+    moderation_status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> list[ProductReviewRead]:
+    reviews = list_reviews_for_moderation(db, moderation_status)
+    response: list[ProductReviewRead] = []
+    for review in reviews:
+        order = get_order_or_404(db, review.order_id)
+        source_item = next((item for item in order.items if item.id == review.order_item_id), None)
+        response.append(
+            ProductReviewRead(
+                id=review.id,
+                order_id=review.order_id,
+                order_item_id=review.order_item_id,
+                product_id=review.product_id,
+                product_name=source_item.product_name if source_item else "Product",
+                image_url=source_item.image_url if source_item else None,
+                rating=review.rating,
+                comment=review.comment,
+                moderation_status=review.moderation_status,
+                moderation_note=review.moderation_note,
+                created_at=review.created_at,
+                updated_at=review.updated_at,
+            )
+        )
+    return response
+
+
+@router.patch("/reviews/{review_id}", response_model=ProductReviewRead)
+def moderate_review_endpoint(
+    review_id: uuid.UUID,
+    payload: SellerReviewModerationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> ProductReviewRead:
+    review = moderate_review(db, review_id, current_user, payload.moderation_status, payload.moderation_note)
+    order = get_order_or_404(db, review.order_id)
+    source_item = next((item for item in order.items if item.id == review.order_item_id), None)
+    return ProductReviewRead(
+        id=review.id,
+        order_id=review.order_id,
+        order_item_id=review.order_item_id,
+        product_id=review.product_id,
+        product_name=source_item.product_name if source_item else "Product",
+        image_url=source_item.image_url if source_item else None,
+        rating=review.rating,
+        comment=review.comment,
+        moderation_status=review.moderation_status,
+        moderation_note=review.moderation_note,
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+    )
 
 
 @router.get("/{order_id}", response_model=SellerOrderRead)
@@ -92,57 +173,14 @@ def update_order_status_endpoint(
     return _order_to_read(update_order_status(db, order, payload.status))
 
 
-@router.patch("/reviews/{review_id}", response_model=ProductReviewRead)
-def moderate_review_endpoint(
-    review_id: uuid.UUID,
-    payload: SellerReviewModerationUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
-) -> ProductReviewRead:
-    review = moderate_review(db, review_id, current_user, payload.moderation_status, payload.moderation_note)
-    order = get_order_or_404(db, review.order_id)
-    source_item = next((item for item in order.items if item.id == review.order_item_id), None)
-    return ProductReviewRead(
-        id=review.id,
-        order_id=review.order_id,
-        order_item_id=review.order_item_id,
-        product_id=review.product_id,
-        product_name=source_item.product_name if source_item else "Product",
-        image_url=source_item.image_url if source_item else None,
-        rating=review.rating,
-        comment=review.comment,
-        moderation_status=review.moderation_status,
-        moderation_note=review.moderation_note,
-        created_at=review.created_at,
-        updated_at=review.updated_at,
-    )
-
-
-@router.get("/reviews/list", response_model=list[ProductReviewRead])
-def list_reviews_endpoint(
-    moderation_status: str | None = Query(default=None),
+@router.patch("/{order_id}/refund/resolve", response_model=SellerOrderRead)
+def resolve_refund_endpoint(
+    order_id: uuid.UUID,
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
-) -> list[ProductReviewRead]:
-    reviews = list_reviews_for_moderation(db, moderation_status)
-    response: list[ProductReviewRead] = []
-    for review in reviews:
-        order = get_order_or_404(db, review.order_id)
-        source_item = next((item for item in order.items if item.id == review.order_item_id), None)
-        response.append(
-            ProductReviewRead(
-                id=review.id,
-                order_id=review.order_id,
-                order_item_id=review.order_item_id,
-                product_id=review.product_id,
-                product_name=source_item.product_name if source_item else "Product",
-                image_url=source_item.image_url if source_item else None,
-                rating=review.rating,
-                comment=review.comment,
-                moderation_status=review.moderation_status,
-                moderation_note=review.moderation_note,
-                created_at=review.created_at,
-                updated_at=review.updated_at,
-            )
-        )
-    return response
+) -> SellerOrderRead:
+    order = get_order_or_404(db, order_id)
+    order.refund_requested = False
+    db.commit()
+    db.refresh(order)
+    return _order_to_read(order)

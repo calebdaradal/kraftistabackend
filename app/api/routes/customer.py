@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.engagement import ProductReview
+from app.models.settings import SiteSetting
 from app.models.user import User
 from app.schemas.customer import (
     CartItemIn,
@@ -19,6 +20,7 @@ from app.schemas.customer import (
     ProductReviewRead,
     ReviewNotificationRead,
 )
+from app.schemas.orders import RefundRequestPayload
 from app.services.customer import (
     add_user_like,
     create_review_for_order_item,
@@ -37,6 +39,17 @@ from app.services.customer import (
 )
 
 router = APIRouter(prefix="/customer", tags=["customer"])
+
+_SETTINGS_KEY = "site"
+
+
+def _get_review_window(db: Session) -> tuple[int, int]:
+    """Return (min_days, max_days) from site settings with defaults 3 / 7."""
+    row = db.query(SiteSetting).filter(SiteSetting.key == _SETTINGS_KEY).one_or_none()
+    data = row.data if row and isinstance(row.data, dict) else {}
+    min_days = max(0, int(data.get("reviewMinDays") or 3))
+    max_days = max(1, int(data.get("reviewMaxDays") or 7))
+    return min_days, max_days
 
 
 def _cart_to_read(cart) -> CartRead:
@@ -73,6 +86,8 @@ def _order_to_read(order) -> OrderRead:
         tracking_reference=order.tracking_reference,
         delivered_at=order.delivered_at,
         created_at=order.created_at,
+        refund_requested=bool(getattr(order, "refund_requested", False)),
+        refund_note=getattr(order, "refund_note", None),
         items=[
             {
                 "id": item.id,
@@ -167,7 +182,8 @@ def delete_like_endpoint(product_id: uuid.UUID, current_user: User = Depends(get
 def list_pending_reviews_endpoint(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[PendingReviewItemRead]:
-    rows = list_pending_review_items(db, current_user)
+    _min_days, max_days = _get_review_window(db)
+    rows = list_pending_review_items(db, current_user, max_days=max_days)
     return [
         PendingReviewItemRead(
             order_id=order.id,
@@ -185,7 +201,8 @@ def list_pending_reviews_endpoint(
 def create_review_endpoint(
     payload: ProductReviewCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> ProductReviewRead:
-    review = create_review_for_order_item(db, current_user, payload)
+    min_days, max_days = _get_review_window(db)
+    review = create_review_for_order_item(db, current_user, payload, min_days=min_days, max_days=max_days)
     order = get_user_order(db, current_user, review.order_id)
     source_item = next((item for item in order.items if item.id == review.order_item_id), None)
     return _review_to_read(
@@ -220,3 +237,22 @@ def review_notifications_endpoint(
 ) -> ReviewNotificationRead:
     sync_pending_review_notification(db, current_user)
     return ReviewNotificationRead(pending_count=get_pending_review_count(db, current_user))
+
+
+@router.post("/orders/{order_id}/refund", response_model=OrderRead)
+def request_refund_endpoint(
+    order_id: uuid.UUID,
+    payload: RefundRequestPayload,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> OrderRead:
+    from fastapi import HTTPException as _HTTPException, status as _status
+
+    order = get_user_order(db, current_user, order_id)
+    if order.refund_requested:
+        raise _HTTPException(status_code=_status.HTTP_400_BAD_REQUEST, detail="Refund already requested for this order.")
+    order.refund_requested = True
+    order.refund_note = (payload.refund_note or "").strip() or None
+    db.commit()
+    db.refresh(order)
+    return _order_to_read(order)

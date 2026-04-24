@@ -61,6 +61,8 @@ class OrderRead(BaseModel):
     tracking_reference: str | None
     delivered_at: datetime | None
     created_at: datetime
+    refund_requested: bool = False
+    refund_note: str | None = None
     items: list[OrderItemRead]
 
 

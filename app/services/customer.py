@@ -1,8 +1,9 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.cart import Cart, CartItem
@@ -182,18 +183,27 @@ def remove_user_like(db: Session, user: User, product_id: uuid.UUID) -> None:
     db.commit()
 
 
-def list_pending_review_items(db: Session, user: User) -> list[tuple[Order, OrderItem]]:
+def list_pending_review_items(db: Session, user: User, max_days: int = 7) -> list[tuple[Order, OrderItem]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
     rows = db.execute(
         select(Order, OrderItem)
         .join(OrderItem, OrderItem.order_id == Order.id)
         .outerjoin(ProductReview, ProductReview.order_item_id == OrderItem.id)
-        .where(Order.user_id == user.id, Order.status == "delivered", ProductReview.id.is_(None))
+        .where(
+            Order.user_id == user.id,
+            Order.status == "delivered",
+            ProductReview.id.is_(None),
+            # Hide items whose review window has already expired
+            or_(Order.delivered_at.is_(None), Order.delivered_at >= cutoff),
+        )
         .order_by(Order.created_at.desc(), OrderItem.id.asc())
     ).all()
     return list(rows)
 
 
-def create_review_for_order_item(db: Session, user: User, payload: ProductReviewCreate) -> ProductReview:
+def create_review_for_order_item(
+    db: Session, user: User, payload: ProductReviewCreate, min_days: int = 3, max_days: int = 7
+) -> ProductReview:
     existing = db.scalar(select(ProductReview).where(ProductReview.order_item_id == payload.order_item_id))
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Review already submitted for this order item.")
@@ -209,6 +219,21 @@ def create_review_for_order_item(db: Session, user: User, payload: ProductReview
     order, order_item = row
     if order.status != "delivered":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can only review delivered items.")
+
+    if order.delivered_at is not None:
+        now = datetime.now(timezone.utc)
+        days_since = (now - order.delivered_at).days
+        if days_since < min_days:
+            available_in = min_days - days_since
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Reviews can be submitted {min_days} days after delivery. Available in {available_in} day(s).",
+            )
+        if days_since > max_days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Review window has expired. Reviews must be submitted within {max_days} days of delivery.",
+            )
 
     review = ProductReview(
         user_id=user.id,

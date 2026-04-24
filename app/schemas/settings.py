@@ -18,3 +18,7 @@ class FaviconUploadResponse(BaseModel):
 class LogoUploadResponse(BaseModel):
     logo_url: str
 
+
+class WideLogoUploadResponse(BaseModel):
+    wide_logo_url: str
+
