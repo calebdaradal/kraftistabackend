@@ -81,7 +81,7 @@ class Product(Base):
     original_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     in_stock: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     stock_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     gallery_urls: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     rating: Mapped[Decimal] = mapped_column(Numeric(3, 2), default=0, nullable=False)
     review_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

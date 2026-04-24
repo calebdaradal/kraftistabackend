@@ -41,6 +41,6 @@ class OrderItem(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     line_total: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     order: Mapped["Order"] = relationship("Order", back_populates="items")
