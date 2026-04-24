@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
-from app.core.config import get_settings
+from app.core.config import get_settings as get_app_config
 from app.db.session import get_db
 from app.models.settings import SiteSetting
 from app.models.user import User, UserRole
@@ -86,7 +86,7 @@ def upload_favicon(
     if len(content) > 2_000_000:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 2MB).")
 
-    settings = get_settings()
+    settings = get_app_config()
     storage_uri = upload_bytes(
         bucket=settings.supabase_bucket_web_settings,
         content=content,
@@ -128,7 +128,7 @@ def upload_logo(
     if len(content) > 2_000_000:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 2MB).")
 
-    settings = get_settings()
+    settings = get_app_config()
     storage_uri = upload_bytes(
         bucket=settings.supabase_bucket_web_settings,
         content=content,
