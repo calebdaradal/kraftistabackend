@@ -21,6 +21,23 @@ SETTINGS_KEY = "site"
 ALLOWED_FAVICON_EXTS = {".ico", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 ALLOWED_LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 
+# Fields managed exclusively by the asset upload/undo endpoints.
+# The generic PUT /settings handler must never allow the client to overwrite
+# these, otherwise a stale frontend snapshot can revert a freshly-uploaded
+# logo/favicon by sending back the old storage URI and version number.
+_INTERNAL_ASSET_FIELDS = frozenset({
+    "logoPath", "logoVersion", "logoPreviousPath", "logoPreviousVersion",
+    "wideLogoPath", "wideLogoVersion", "wideLogoPreviousPath", "wideLogoPreviousVersion",
+    "faviconPath", "faviconVersion", "faviconPreviousPath", "faviconPreviousVersion",
+})
+
+# In addition to internal storage fields, the computed/derived fields should
+# also never be accepted from the client in PUT requests.
+_PROTECTED_ASSET_FIELDS = _INTERNAL_ASSET_FIELDS | frozenset({
+    "logoUrl", "wideLogoUrl", "faviconUrl",
+    "hasLogoPrevious", "hasFaviconPrevious", "hasWideLogoPrevious",
+})
+
 
 def _upsert_settings(db: Session, data: Any, user_id: str | None) -> None:
     existing: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
@@ -43,16 +60,25 @@ def get_settings(db: Session = Depends(get_db)) -> SiteSettingsResponse:
     if not row:
         return SiteSettingsResponse(data=None)
     data = dict(row.data or {})
+
+    # Compute public asset URLs from internal storage paths
     if data.get("faviconPath"):
         data["faviconUrl"] = _public_asset_url("favicon", data.get("faviconVersion"))
     if data.get("logoPath"):
         data["logoUrl"] = _public_asset_url("logo", data.get("logoVersion"))
     if data.get("wideLogoPath"):
         data["wideLogoUrl"] = _public_asset_url("logo/wide", data.get("wideLogoVersion"))
-    # Expose whether undo is available (don't expose actual storage URIs)
+
+    # Expose whether undo is available (boolean only — don't expose storage URIs)
     data["hasLogoPrevious"] = bool(data.get("logoPreviousPath"))
     data["hasFaviconPrevious"] = bool(data.get("faviconPreviousPath"))
     data["hasWideLogoPrevious"] = bool(data.get("wideLogoPreviousPath"))
+
+    # Strip all internal storage fields before sending to the client so they
+    # can never be echoed back and accidentally overwrite DB state via PUT.
+    for key in _INTERNAL_ASSET_FIELDS:
+        data.pop(key, None)
+
     return SiteSettingsResponse(data=data)
 
 
@@ -65,7 +91,11 @@ def put_settings(
     existing: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     merged = dict(existing.data) if existing and isinstance(existing.data, dict) else {}
     if isinstance(payload.data, dict):
-        merged.update(payload.data)
+        # Strip storage-managed and computed fields so the client can never
+        # accidentally overwrite a freshly-uploaded logo/favicon path by
+        # sending back a stale snapshot from localStorage.
+        safe_data = {k: v for k, v in payload.data.items() if k not in _PROTECTED_ASSET_FIELDS}
+        merged.update(safe_data)
     else:
         merged = payload.data
     _upsert_settings(db, merged, str(current_user.id))
