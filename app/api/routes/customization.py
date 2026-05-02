@@ -11,7 +11,7 @@ from app.db.session import get_db
 from app.models.customization import SiteCustomization
 from app.models.user import User, UserRole
 from app.schemas.customization import SiteCustomizationResponse, UpsertCustomizationRequest
-from app.services.storage import download_bytes_from_uri, is_supabase_uri, upload_bytes
+from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_supabase_uri, upload_bytes
 from app.core.config import get_settings as get_app_config
 
 router = APIRouter(prefix="/customization", tags=["customization"])
@@ -50,7 +50,7 @@ def _content_type_from_path(path: str, fallback: str) -> str:
 def get_site_customization(db: Session = Depends(get_db)) -> SiteCustomizationResponse:
     rows = (
         db.query(SiteCustomization)
-        .filter(SiteCustomization.key.in_(["about", "footer", "hero"]))
+        .filter(SiteCustomization.key.in_(["about", "footer", "hero", "services"]))
         .all()
     )
     data_by_key = {row.key: row.data for row in rows}
@@ -58,6 +58,7 @@ def get_site_customization(db: Session = Depends(get_db)) -> SiteCustomizationRe
         about=data_by_key.get("about"),
         footer=data_by_key.get("footer"),
         hero=data_by_key.get("hero"),
+        services=data_by_key.get("services"),
     )
 
 
@@ -89,6 +90,94 @@ def put_hero_customization(
 ) -> None:
     _upsert_customization(db, "hero", payload.data, str(current_user.id))
     db.commit()
+
+
+@router.put("/services", status_code=204)
+def put_services_customization(
+    payload: UpsertCustomizationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> None:
+    # Preserve the stored Supabase URI if the frontend sends back only the
+    # proxy API path (which happens after an upload + save cycle).
+    data: dict = dict(payload.data) if isinstance(payload.data, dict) else payload.data
+    existing: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "services").one_or_none()
+    )
+    if existing and isinstance(existing.data, dict):
+        stored_image = existing.data.get("image")
+        incoming_image = data.get("image") if isinstance(data, dict) else None
+        if stored_image and is_supabase_uri(stored_image):
+            if not incoming_image or not is_supabase_uri(incoming_image):
+                data["image"] = stored_image
+    _upsert_customization(db, "services", data, str(current_user.id))
+    db.commit()
+
+
+@router.post("/services/image")
+def upload_services_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing filename.")
+
+    ext = f".{file.filename.rsplit('.', 1)[1].lower()}" if "." in file.filename else ""
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTS))}",
+        )
+
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
+    if len(content) > 5_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 5MB).")
+
+    settings = get_app_config()
+    storage_uri = upload_bytes(
+        bucket=settings.supabase_bucket_web_settings,
+        content=content,
+        filename=file.filename,
+        folder="services",
+        content_type=file.content_type,
+    )
+
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "services").one_or_none()
+    )
+    current: dict = dict(row.data) if row else {}
+
+    # Delete the previously stored file before replacing the reference.
+    old_uri = current.get("image")
+    if old_uri and is_supabase_uri(old_uri):
+        delete_file_from_uri(old_uri)
+
+    current["image"] = storage_uri
+    current["imageUrl"] = "/api/customization/services/image"
+    _upsert_customization(db, "services", current, str(current_user.id))
+    db.commit()
+
+    return {"image_url": "/api/customization/services/image"}
+
+
+@router.get("/services/image")
+def get_services_image(db: Session = Depends(get_db)) -> Response:
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "services").one_or_none()
+    )
+    data = row.data if row else {}
+    image_path = data.get("image") if isinstance(data, dict) else None
+    if not image_path or not is_supabase_uri(image_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Services image not configured.")
+    content = download_bytes_from_uri(image_path)
+    return Response(
+        content=content,
+        media_type=_content_type_from_path(image_path, "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.post("/about/preview-image")
@@ -127,6 +216,12 @@ def upload_about_preview_image(
         db.query(SiteCustomization).filter(SiteCustomization.key == "about").one_or_none()
     )
     current: dict = dict(row.data) if row else {}
+
+    # Delete the previously stored file before replacing the reference.
+    old_uri = current.get("previewImage")
+    if old_uri and is_supabase_uri(old_uri):
+        delete_file_from_uri(old_uri)
+
     current["previewImage"] = storage_uri
     current["previewImageUrl"] = f"/api/customization/about/preview-image"
     _upsert_customization(db, "about", current, str(current_user.id))
