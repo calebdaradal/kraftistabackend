@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
@@ -17,6 +18,64 @@ from app.core.config import get_settings as get_app_config
 router = APIRouter(prefix="/customization", tags=["customization"])
 
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+
+
+def _services_collect_sb_uris(services: object) -> set[str]:
+    uris: set[str] = set()
+    if not isinstance(services, dict):
+        return uris
+    img = services.get("image")
+    if img and isinstance(img, str) and is_supabase_uri(img):
+        uris.add(img)
+    bullets = services.get("bullets")
+    if not isinstance(bullets, list):
+        return uris
+    for b in bullets:
+        if not isinstance(b, dict):
+            continue
+        for key in ("bulletImage", "carouselImage"):
+            v = b.get(key)
+            if v and isinstance(v, str) and is_supabase_uri(v):
+                uris.add(v)
+    return uris
+
+
+def _bullet_merge_media(stored: dict | None, incoming: dict | None) -> None:
+    if not stored or not incoming:
+        return
+    for key in ("bulletImage", "carouselImage"):
+        s = stored.get(key)
+        inc = incoming.get(key)
+        if s and isinstance(s, str) and is_supabase_uri(s):
+            if not inc or not isinstance(inc, str) or not is_supabase_uri(inc):
+                incoming[key] = s
+
+
+def _merge_services_media_from_stored(stored: dict | None, merged: dict) -> None:
+    if not isinstance(merged, dict):
+        return
+    if isinstance(stored, dict):
+        stored_image = stored.get("image")
+        incoming_image = merged.get("image")
+        if stored_image and isinstance(stored_image, str) and is_supabase_uri(stored_image):
+            if not incoming_image or not isinstance(incoming_image, str) or not is_supabase_uri(incoming_image):
+                merged["image"] = stored_image
+
+    bullets_in = merged.get("bullets")
+    if not isinstance(bullets_in, list):
+        return
+    by_id: dict[str, dict] = {}
+    sb = stored.get("bullets") if isinstance(stored, dict) else None
+    if isinstance(sb, list):
+        for b in sb:
+            if isinstance(b, dict) and b.get("id") is not None:
+                by_id[str(b["id"])] = b
+
+    for b in bullets_in:
+        if isinstance(b, dict) and b.get("id") is not None:
+            sid = str(b["id"])
+            if sid in by_id:
+                _bullet_merge_media(by_id[sid], b)
 
 
 def _upsert_customization(db: Session, key: str, data: object, user_id: str | None) -> None:
@@ -98,20 +157,67 @@ def put_services_customization(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> None:
-    # Preserve the stored Supabase URI if the frontend sends back only the
-    # proxy API path (which happens after an upload + save cycle).
-    data: dict = dict(payload.data) if isinstance(payload.data, dict) else payload.data
+    raw = payload.data if isinstance(payload.data, dict) else payload.data
+    incoming: dict = copy.deepcopy(dict(raw)) if isinstance(raw, dict) else {}
     existing: SiteCustomization | None = (
         db.query(SiteCustomization).filter(SiteCustomization.key == "services").one_or_none()
     )
-    if existing and isinstance(existing.data, dict):
-        stored_image = existing.data.get("image")
-        incoming_image = data.get("image") if isinstance(data, dict) else None
-        if stored_image and is_supabase_uri(stored_image):
-            if not incoming_image or not is_supabase_uri(incoming_image):
-                data["image"] = stored_image
-    _upsert_customization(db, "services", data, str(current_user.id))
+    stored: dict | None = dict(existing.data) if existing and isinstance(existing.data, dict) else None
+
+    old_uris = _services_collect_sb_uris(stored)
+    _merge_services_media_from_stored(stored, incoming)
+    new_uris = _services_collect_sb_uris(incoming)
+    for orphan in old_uris - new_uris:
+        delete_file_from_uri(orphan)
+
+    _upsert_customization(db, "services", incoming, str(current_user.id))
     db.commit()
+
+
+def _services_row(db: Session) -> dict:
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "services").one_or_none()
+    )
+    return dict(row.data) if row and isinstance(row.data, dict) else {}
+
+
+def _find_bullet(services_data: dict, bullet_id: str) -> tuple[int, dict | None]:
+    bullets = services_data.get("bullets")
+    if not isinstance(bullets, list):
+        return -1, None
+    for i, b in enumerate(bullets):
+        if isinstance(b, dict) and str(b.get("id")) == str(bullet_id):
+            return i, b
+    return -1, None
+
+
+def _persist_services(db: Session, data: dict, user_id: str) -> None:
+    _upsert_customization(db, "services", data, user_id)
+    db.commit()
+
+
+@router.delete("/services/bullet/{bullet_id}")
+def delete_services_bullet(
+    bullet_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> None:
+    current = _services_row(db)
+    idx, bullet = _find_bullet(current, bullet_id)
+    if idx < 0 or not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+
+    for key in ("bulletImage", "carouselImage"):
+        uri = bullet.get(key)
+        if uri and isinstance(uri, str) and is_supabase_uri(uri):
+            delete_file_from_uri(uri)
+
+    bullets = current.get("bullets")
+    if isinstance(bullets, list):
+        bullets.pop(idx)
+
+    current["bullets"] = bullets
+    _persist_services(db, current, str(current_user.id))
 
 
 @router.post("/services/image")
@@ -176,6 +282,172 @@ def get_services_image(db: Session = Depends(get_db)) -> Response:
     return Response(
         content=content,
         media_type=_content_type_from_path(image_path, "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+def _bullet_image_upload_validate(file: UploadFile) -> tuple[bytes, str]:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing filename.")
+    ext = f".{file.filename.rsplit('.', 1)[1].lower()}" if "." in file.filename else ""
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTS))}",
+        )
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
+    if len(content) > 5_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 5MB).")
+    return content, ext
+
+
+@router.post("/services/bullet/{bullet_id}/carousel")
+def upload_services_bullet_carousel_image(
+    bullet_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict:
+    content, _ext = _bullet_image_upload_validate(file)
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+
+    cfg = get_app_config()
+    storage_uri = upload_bytes(
+        bucket=cfg.supabase_bucket_web_settings,
+        content=content,
+        filename=file.filename or "upload",
+        folder=f"services/bullets/{bullet_id}",
+        content_type=file.content_type,
+    )
+    prev = bullet.get("carouselImage")
+    if prev and isinstance(prev, str) and is_supabase_uri(prev):
+        delete_file_from_uri(prev)
+
+    bullet["carouselImage"] = storage_uri
+    bullet["carouselImageUrl"] = f"/api/customization/services/bullet/{bullet_id}/carousel-image"
+    _persist_services(db, current, str(current_user.id))
+    return {
+        "carousel_image_url": bullet["carouselImageUrl"],
+        "carousel_image": storage_uri,
+    }
+
+
+@router.delete("/services/bullet/{bullet_id}/carousel")
+def delete_services_bullet_carousel_image(
+    bullet_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> None:
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+
+    prev = bullet.get("carouselImage")
+    if prev and isinstance(prev, str) and is_supabase_uri(prev):
+        delete_file_from_uri(prev)
+
+    bullet.pop("carouselImage", None)
+    bullet.pop("carouselImageUrl", None)
+    _persist_services(db, current, str(current_user.id))
+
+
+@router.get("/services/bullet/{bullet_id}/carousel-image")
+def get_services_bullet_carousel_image(
+    bullet_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+    uri = bullet.get("carouselImage")
+    if not uri or not is_supabase_uri(str(uri)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No carousel image for this bullet.")
+
+    uri_s = str(uri)
+    raw = download_bytes_from_uri(uri_s)
+    return Response(
+        content=raw,
+        media_type=_content_type_from_path(uri_s, "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.post("/services/bullet/{bullet_id}/icon")
+def upload_services_bullet_icon_image(
+    bullet_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict:
+    content, _ext = _bullet_image_upload_validate(file)
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+
+    cfg = get_app_config()
+    storage_uri = upload_bytes(
+        bucket=cfg.supabase_bucket_web_settings,
+        content=content,
+        filename=file.filename or "upload",
+        folder=f"services/bullets/{bullet_id}/icons",
+        content_type=file.content_type,
+    )
+    prev = bullet.get("bulletImage")
+    if prev and isinstance(prev, str) and is_supabase_uri(prev):
+        delete_file_from_uri(prev)
+
+    bullet["bulletImage"] = storage_uri
+    bullet["bulletImageUrl"] = f"/api/customization/services/bullet/{bullet_id}/icon-image"
+    _persist_services(db, current, str(current_user.id))
+    return {
+        "bullet_image_url": bullet["bulletImageUrl"],
+        "bullet_image": storage_uri,
+    }
+
+
+@router.delete("/services/bullet/{bullet_id}/icon")
+def delete_services_bullet_icon_image(
+    bullet_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> None:
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+
+    prev = bullet.get("bulletImage")
+    if prev and isinstance(prev, str) and is_supabase_uri(prev):
+        delete_file_from_uri(prev)
+
+    bullet.pop("bulletImage", None)
+    bullet.pop("bulletImageUrl", None)
+    _persist_services(db, current, str(current_user.id))
+
+
+@router.get("/services/bullet/{bullet_id}/icon-image")
+def get_services_bullet_icon_image(bullet_id: str, db: Session = Depends(get_db)) -> Response:
+    current = _services_row(db)
+    _idx, bullet = _find_bullet(current, bullet_id)
+    if not bullet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bullet not found.")
+    uri = bullet.get("bulletImage")
+    if not uri or not is_supabase_uri(str(uri)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No bullet icon image.")
+
+    uri_s = str(uri)
+    raw = download_bytes_from_uri(uri_s)
+    return Response(
+        content=raw,
+        media_type=_content_type_from_path(uri_s, "application/octet-stream"),
         headers={"Cache-Control": "public, max-age=86400"},
     )
 

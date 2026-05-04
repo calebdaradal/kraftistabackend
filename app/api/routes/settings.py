@@ -12,7 +12,13 @@ from app.core.config import get_settings as get_app_config
 from app.db.session import get_db
 from app.models.settings import SiteSetting
 from app.models.user import User, UserRole
-from app.schemas.settings import FaviconUploadResponse, LogoUploadResponse, SiteSettingsResponse, UpsertSiteSettingsRequest, WideLogoUploadResponse
+from app.schemas.settings import (
+    FaviconUploadResponse,
+    LogoUploadResponse,
+    SiteSettingsResponse,
+    UpsertSiteSettingsRequest,
+    WideLogoUploadResponse,
+)
 from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_supabase_uri, upload_bytes
 
 router = APIRouter(prefix="/settings", tags=["settings"])
