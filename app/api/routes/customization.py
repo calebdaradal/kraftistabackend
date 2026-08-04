@@ -147,7 +147,97 @@ def put_hero_customization(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> None:
-    _upsert_customization(db, "hero", payload.data, str(current_user.id))
+    incoming = dict(payload.data) if isinstance(payload.data, dict) else {}
+    existing: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "hero").one_or_none()
+    )
+    stored = dict(existing.data) if existing and isinstance(existing.data, dict) else {}
+    stored_image = stored.get("image")
+    if stored_image and is_supabase_uri(str(stored_image)) and not incoming.get("image"):
+        incoming["image"] = stored_image
+        incoming["imageUrl"] = "/api/customization/hero/image"
+    _upsert_customization(db, "hero", incoming, str(current_user.id))
+    db.commit()
+
+
+@router.post("/hero/image")
+def upload_hero_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing filename.")
+    ext = f".{file.filename.rsplit('.', 1)[1].lower()}" if "." in file.filename else ""
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTS))}",
+        )
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
+    if len(content) > 5_000_000:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 5MB).")
+
+    config = get_app_config()
+    storage_uri = upload_bytes(
+        bucket=config.supabase_bucket_web_settings,
+        content=content,
+        filename=file.filename,
+        folder="hero",
+        content_type=file.content_type,
+    )
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "hero").one_or_none()
+    )
+    current = dict(row.data) if row and isinstance(row.data, dict) else {}
+    old_uri = current.get("image")
+    if old_uri and is_supabase_uri(str(old_uri)):
+        delete_file_from_uri(str(old_uri))
+
+    current["image"] = storage_uri
+    current["imageUrl"] = "/api/customization/hero/image"
+    current.setdefault("imageAlt", "Kraftista handcrafted and personalized gifts")
+    _upsert_customization(db, "hero", current, str(current_user.id))
+    db.commit()
+    return {"image_url": current["imageUrl"], "image": storage_uri}
+
+
+@router.get("/hero/image")
+def get_hero_image(db: Session = Depends(get_db)) -> Response:
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "hero").one_or_none()
+    )
+    data = row.data if row else {}
+    image_path = data.get("image") if isinstance(data, dict) else None
+    if not image_path or not is_supabase_uri(str(image_path)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hero image not configured.")
+    image_uri = str(image_path)
+    content = download_bytes_from_uri(image_uri)
+    return Response(
+        content=content,
+        media_type=_content_type_from_path(image_uri, "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.delete("/hero/image", status_code=204)
+def delete_hero_image(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> None:
+    row: SiteCustomization | None = (
+        db.query(SiteCustomization).filter(SiteCustomization.key == "hero").one_or_none()
+    )
+    current = dict(row.data) if row and isinstance(row.data, dict) else {}
+    old_uri = current.get("image")
+    if old_uri and is_supabase_uri(str(old_uri)):
+        delete_file_from_uri(str(old_uri))
+    current.pop("image", None)
+    current["imageUrl"] = "/HeaderImage.png"
+    current.setdefault("imageAlt", "Kraftista handcrafted and personalized gifts")
+    _upsert_customization(db, "hero", current, str(current_user.id))
     db.commit()
 
 
