@@ -106,11 +106,13 @@ class TaxonomyBase(BaseModel):
 
 
 class CategoryCreate(TaxonomyBase):
-    pass
+    image_url: str | None = None
+    description: str | None = None
 
 
 class CategoryUpdate(TaxonomyBase):
-    pass
+    image_url: str | None = None
+    description: str | None = None
 
 
 class CategoryRead(BaseModel):
@@ -119,9 +121,22 @@ class CategoryRead(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    image_url: str | None = None
+    description: str | None = None
     product_count: int
     created_at: datetime
     updated_at: datetime
+
+
+class PublicCategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    image_url: str | None = None
+    description: str | None = None
+    product_count: int
 
 
 class CollectionCreate(TaxonomyBase):

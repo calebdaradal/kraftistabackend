@@ -17,6 +17,7 @@ from app.schemas.product import (
     ProductCreate,
     ProductRead,
     ProductUpdate,
+    PublicCategoryRead,
     PublicReviewRead,
     TagCreate,
     TagRead,
@@ -40,6 +41,7 @@ from app.services.products import (
     list_collections_with_counts,
     list_products,
     list_tags_with_counts,
+    resolve_category_image,
     serialize_product,
     update_category,
     update_collection,
@@ -85,9 +87,29 @@ def list_categories_endpoint(
                 "id": row.category.id,
                 "name": row.category.name,
                 "slug": row.category.slug,
+                "image_url": resolve_category_image(row.category.image_url),
+                "description": row.category.description,
                 "product_count": row.product_count,
                 "created_at": row.category.created_at,
                 "updated_at": row.category.updated_at,
+            }
+        )
+        for row in rows
+    ]
+
+
+@router.get("/categories/public", response_model=list[PublicCategoryRead])
+def list_public_categories_endpoint(db: Session = Depends(get_db)) -> list[PublicCategoryRead]:
+    rows = list_categories_with_counts(db)
+    return [
+        PublicCategoryRead.model_validate(
+            {
+                "id": row.category.id,
+                "name": row.category.name,
+                "slug": row.category.slug,
+                "image_url": resolve_category_image(row.category.image_url),
+                "description": row.category.description,
+                "product_count": row.product_count,
             }
         )
         for row in rows
@@ -100,12 +122,14 @@ def create_category_endpoint(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> CategoryRead:
-    category = create_category(db, payload.name)
+    category = create_category(db, payload.name, image_url=payload.image_url, description=payload.description)
     return CategoryRead.model_validate(
         {
             "id": category.id,
             "name": category.name,
             "slug": category.slug,
+            "image_url": resolve_category_image(category.image_url),
+            "description": category.description,
             "product_count": 0,
             "created_at": category.created_at,
             "updated_at": category.updated_at,
@@ -120,12 +144,23 @@ def update_category_endpoint(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> CategoryRead:
-    category = update_category(db, category_id, payload.name)
+    fields_set = payload.model_fields_set
+    category = update_category(
+        db,
+        category_id,
+        payload.name,
+        image_url=payload.image_url,
+        description=payload.description,
+        image_url_set="image_url" in fields_set,
+        description_set="description" in fields_set,
+    )
     return CategoryRead.model_validate(
         {
             "id": category.id,
             "name": category.name,
             "slug": category.slug,
+            "image_url": resolve_category_image(category.image_url),
+            "description": category.description,
             "product_count": count_products_for_category(db, category_id),
             "created_at": category.created_at,
             "updated_at": category.updated_at,

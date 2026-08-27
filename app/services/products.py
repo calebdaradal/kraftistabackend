@@ -299,19 +299,53 @@ def list_categories_with_counts(db: Session) -> list[CategoryWithCount]:
     return [CategoryWithCount(category=row[0], product_count=int(row[1])) for row in rows]
 
 
-def create_category(db: Session, name: str) -> Category:
+def _persist_category_image(image_url: str | None, category_id: uuid.UUID) -> str | None:
+    if not isinstance(image_url, str) or not image_url:
+        return image_url
+    if is_data_url(image_url):
+        settings = get_settings()
+        return upload_data_url(
+            bucket=settings.supabase_bucket_product_images,
+            data_url=image_url,
+            folder=f"categories/{category_id}",
+        )
+    return image_url
+
+
+def resolve_category_image(image_url: str | None) -> str | None:
+    if not image_url:
+        return image_url
+    if is_supabase_uri(image_url):
+        settings = get_settings()
+        return create_signed_url_from_uri(image_url, settings.supabase_signed_url_exp_seconds)
+    return image_url
+
+
+def create_category(
+    db: Session, name: str, image_url: str | None = None, description: str | None = None
+) -> Category:
     normalized = _normalize_name(name)
     existing = db.scalar(select(Category).where(func.lower(Category.name) == normalized.lower()))
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists.")
-    category = Category(name=normalized, slug=_slugify(normalized))
+    category = Category(name=normalized, slug=_slugify(normalized), description=description)
+    category.id = uuid.uuid4()
+    category.image_url = _persist_category_image(image_url, category.id)
     db.add(category)
     db.commit()
     db.refresh(category)
     return category
 
 
-def update_category(db: Session, category_id: uuid.UUID, name: str) -> Category:
+def update_category(
+    db: Session,
+    category_id: uuid.UUID,
+    name: str,
+    image_url: str | None = None,
+    description: str | None = None,
+    image_url_set: bool = False,
+    description_set: bool = False,
+) -> Category:
     category = db.get(Category, category_id)
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
@@ -321,6 +355,10 @@ def update_category(db: Session, category_id: uuid.UUID, name: str) -> Category:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists.")
     category.name = normalized
     category.slug = _slugify(normalized)
+    if image_url_set:
+        category.image_url = _persist_category_image(image_url, category.id)
+    if description_set:
+        category.description = description
     db.commit()
     db.refresh(category)
     return category
