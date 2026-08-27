@@ -11,6 +11,9 @@ from app.schemas.product import (
     CategoryCreate,
     CategoryRead,
     CategoryUpdate,
+    CollectionCreate,
+    CollectionRead,
+    CollectionUpdate,
     ProductCreate,
     ProductRead,
     ProductUpdate,
@@ -22,19 +25,24 @@ from app.schemas.product import (
 )
 from app.services.products import (
     count_products_for_category,
+    count_products_for_collection,
     count_products_for_tag,
     create_category,
+    create_collection,
     create_product,
     create_tag,
     delete_category,
+    delete_collection,
     delete_product,
     delete_tag,
     get_product_or_404,
     list_categories_with_counts,
+    list_collections_with_counts,
     list_products,
     list_tags_with_counts,
     serialize_product,
     update_category,
+    update_collection,
     update_product,
     update_tag,
 )
@@ -55,12 +63,13 @@ def create_product_endpoint(
 @router.get("", response_model=list[ProductRead])
 def list_products_endpoint(
     category: str | None = Query(default=None),
+    collection: str | None = Query(default=None),
     active: bool | None = Query(default=None),
     featured: bool | None = Query(default=None),
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[ProductRead]:
-    products = list_products(db, category=category, active=active, search=q, featured=featured)
+    products = list_products(db, category=category, collection=collection, active=active, search=q, featured=featured)
     return [ProductRead.model_validate(serialize_product(product)) for product in products]
 
 
@@ -140,6 +149,85 @@ def delete_category_endpoint(
     _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
 ) -> Response:
     delete_category(db, category_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/collections", response_model=list[CollectionRead])
+def list_collections_endpoint(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> list[CollectionRead]:
+    rows = list_collections_with_counts(db)
+    return [
+        CollectionRead.model_validate(
+            {
+                "id": row.collection.id,
+                "name": row.collection.name,
+                "slug": row.collection.slug,
+                "product_count": row.product_count,
+                "created_at": row.collection.created_at,
+                "updated_at": row.collection.updated_at,
+            }
+        )
+        for row in rows
+    ]
+
+
+@router.post("/collections", response_model=CollectionRead, status_code=201)
+def create_collection_endpoint(
+    payload: CollectionCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> CollectionRead:
+    collection = create_collection(db, payload.name)
+    return CollectionRead.model_validate(
+        {
+            "id": collection.id,
+            "name": collection.name,
+            "slug": collection.slug,
+            "product_count": 0,
+            "created_at": collection.created_at,
+            "updated_at": collection.updated_at,
+        }
+    )
+
+
+@router.patch("/collections/{collection_id}", response_model=CollectionRead)
+def update_collection_endpoint(
+    collection_id: uuid.UUID,
+    payload: CollectionUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> CollectionRead:
+    collection = update_collection(db, collection_id, payload.name)
+    return CollectionRead.model_validate(
+        {
+            "id": collection.id,
+            "name": collection.name,
+            "slug": collection.slug,
+            "product_count": count_products_for_collection(db, collection_id),
+            "created_at": collection.created_at,
+            "updated_at": collection.updated_at,
+        }
+    )
+
+
+@router.get("/collections/{collection_id}/impact", response_model=TaxonomyDeleteImpact)
+def collection_delete_impact_endpoint(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> TaxonomyDeleteImpact:
+    return TaxonomyDeleteImpact(product_count=count_products_for_collection(db, collection_id))
+
+
+@router.delete("/collections/{collection_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_collection_endpoint(
+    collection_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> Response:
+    delete_collection(db, collection_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

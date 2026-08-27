@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.product import Category, Product, Tag
+from app.models.product import Category, Collection, Product, Tag
 from app.schemas.product import ProductCreate, ProductUpdate
 from app.core.config import get_settings
 from app.services.storage import create_signed_url_from_uri, is_data_url, is_supabase_uri, upload_data_url
@@ -16,6 +16,12 @@ from app.services.storage import create_signed_url_from_uri, is_data_url, is_sup
 @dataclass
 class CategoryWithCount:
     category: Category
+    product_count: int
+
+
+@dataclass
+class CollectionWithCount:
+    collection: Collection
     product_count: int
 
 
@@ -44,6 +50,15 @@ def _resolve_category(db: Session, category_name: str | None) -> Category | None
         return None
     normalized = _normalize_name(category_name)
     return db.scalar(select(Category).where(func.lower(Category.name) == normalized.lower()))
+
+
+def _resolve_collection(db: Session, collection_name: str | None) -> Collection | None:
+    if collection_name is None:
+        return None
+    if not collection_name.strip():
+        return None
+    normalized = _normalize_name(collection_name)
+    return db.scalar(select(Collection).where(func.lower(Collection.name) == normalized.lower()))
 
 
 def _get_or_create_tags(db: Session, tag_names: list[str] | None) -> list[Tag]:
@@ -99,6 +114,7 @@ def serialize_product(product: Product) -> dict:
         "short_description": product.short_description,
         "full_description": product.full_description,
         "category": product.category_ref.name if product.category_ref else None,
+        "collection": product.collection_ref.name if product.collection_ref else None,
         "featured": product.featured,
         "active": product.active,
         "price": product.price,
@@ -125,10 +141,12 @@ def serialize_product(product: Product) -> dict:
 
 
 def _apply_product_filters(
-    query: Select[tuple[Product]], category: str | None, active: bool | None, search: str | None, featured: bool | None
+    query: Select[tuple[Product]], category: str | None, collection: str | None, active: bool | None, search: str | None, featured: bool | None
 ) -> Select[tuple[Product]]:
     if category:
         query = query.join(Product.category_ref).where(func.lower(Category.name) == category.strip().lower())
+    if collection:
+        query = query.join(Product.collection_ref).where(func.lower(Collection.name) == collection.strip().lower())
     if active is not None:
         query = query.where(Product.active == active)
     if featured is not None:
@@ -150,8 +168,10 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     values = _normalize_media_payload(payload.model_dump(), str(product_id))
     tag_names = values.pop("tags", None)
     category_name = values.pop("category", None)
+    collection_name = values.pop("collection", None)
     product = Product(id=product_id, **values)
     product.category_ref = _resolve_category(db, category_name)
+    product.collection_ref = _resolve_collection(db, collection_name)
     product.tags_ref = _get_or_create_tags(db, tag_names)
     db.add(product)
     db.commit()
@@ -162,7 +182,7 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
 def get_product_or_404(db: Session, product_id: uuid.UUID) -> Product:
     product = db.scalar(
         select(Product)
-        .options(selectinload(Product.category_ref), selectinload(Product.tags_ref))
+        .options(selectinload(Product.category_ref), selectinload(Product.collection_ref), selectinload(Product.tags_ref))
         .where(Product.id == product_id)
     )
     if product is None:
@@ -174,6 +194,8 @@ def update_product(db: Session, product: Product, payload: ProductUpdate) -> Pro
     update_data = _normalize_media_payload(payload.model_dump(exclude_unset=True), str(product.id))
     tag_names = update_data.pop("tags", None) if "tags" in update_data else None
     category_name = update_data.pop("category", None) if "category" in update_data else None
+    collection_provided = "collection" in update_data
+    collection_name = update_data.pop("collection", None) if collection_provided else None
 
     if "sku" in update_data and update_data["sku"] != product.sku:
         existing = db.scalar(select(Product).where(Product.sku == update_data["sku"]))
@@ -184,6 +206,8 @@ def update_product(db: Session, product: Product, payload: ProductUpdate) -> Pro
         setattr(product, key, value)
     if category_name is not None:
         product.category_ref = _resolve_category(db, category_name)
+    if collection_provided:
+        product.collection_ref = _resolve_collection(db, collection_name)
     if tag_names is not None:
         product.tags_ref = _get_or_create_tags(db, tag_names)
 
@@ -193,10 +217,10 @@ def update_product(db: Session, product: Product, payload: ProductUpdate) -> Pro
 
 
 def list_products(
-    db: Session, category: str | None, active: bool | None, search: str | None, featured: bool | None
+    db: Session, category: str | None, collection: str | None, active: bool | None, search: str | None, featured: bool | None
 ) -> list[Product]:
-    query = select(Product).options(selectinload(Product.category_ref), selectinload(Product.tags_ref)).order_by(Product.created_at.desc())
-    query = _apply_product_filters(query, category, active, search, featured)
+    query = select(Product).options(selectinload(Product.category_ref), selectinload(Product.collection_ref), selectinload(Product.tags_ref)).order_by(Product.created_at.desc())
+    query = _apply_product_filters(query, category, collection, active, search, featured)
     return list(db.scalars(query).all())
 
 
@@ -315,6 +339,59 @@ def delete_category(db: Session, category_id: uuid.UUID) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
     db.query(Product).filter(Product.category_id == category_id).update({Product.category_id: None}, synchronize_session=False)
     db.delete(category)
+    db.commit()
+
+
+def list_collections_with_counts(db: Session) -> list[CollectionWithCount]:
+    rows = db.execute(
+        select(Collection, func.count(Product.id).label("product_count"))
+        .outerjoin(Product, Product.collection_id == Collection.id)
+        .group_by(Collection.id)
+        .order_by(Collection.name.asc())
+    ).all()
+    return [CollectionWithCount(collection=row[0], product_count=int(row[1])) for row in rows]
+
+
+def create_collection(db: Session, name: str) -> Collection:
+    normalized = _normalize_name(name)
+    existing = db.scalar(select(Collection).where(func.lower(Collection.name) == normalized.lower()))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Collection already exists.")
+    collection = Collection(name=normalized, slug=_slugify(normalized))
+    db.add(collection)
+    db.commit()
+    db.refresh(collection)
+    return collection
+
+
+def update_collection(db: Session, collection_id: uuid.UUID, name: str) -> Collection:
+    collection = db.get(Collection, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found.")
+    normalized = _normalize_name(name)
+    existing = db.scalar(select(Collection).where(func.lower(Collection.name) == normalized.lower(), Collection.id != collection_id))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Collection already exists.")
+    collection.name = normalized
+    collection.slug = _slugify(normalized)
+    db.commit()
+    db.refresh(collection)
+    return collection
+
+
+def count_products_for_collection(db: Session, collection_id: uuid.UUID) -> int:
+    collection = db.get(Collection, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found.")
+    return int(db.scalar(select(func.count(Product.id)).where(Product.collection_id == collection_id)) or 0)
+
+
+def delete_collection(db: Session, collection_id: uuid.UUID) -> None:
+    collection = db.get(Collection, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found.")
+    db.query(Product).filter(Product.collection_id == collection_id).update({Product.collection_id: None}, synchronize_session=False)
+    db.delete(collection)
     db.commit()
 
 

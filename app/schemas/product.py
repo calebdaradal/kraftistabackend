@@ -11,6 +11,7 @@ class ProductBase(BaseModel):
     short_description: str | None = None
     full_description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    collection: str | None = Field(default=None, max_length=120)
     featured: bool = False
     active: bool = True
     price: Decimal = Field(ge=0)
@@ -43,6 +44,7 @@ class ProductUpdate(BaseModel):
     short_description: str | None = None
     full_description: str | None = None
     category: str | None = Field(default=None, max_length=120)
+    collection: str | None = Field(default=None, max_length=120)
     featured: bool | None = None
     active: bool | None = None
     price: Decimal | None = Field(default=None, ge=0)
@@ -74,6 +76,7 @@ class ProductRead(BaseModel):
     short_description: str | None
     full_description: str | None
     category: str | None
+    collection: str | None
     featured: bool
     active: bool
     price: Decimal
@@ -111,6 +114,25 @@ class CategoryUpdate(TaxonomyBase):
 
 
 class CategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    slug: str
+    product_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CollectionCreate(TaxonomyBase):
+    pass
+
+
+class CollectionUpdate(TaxonomyBase):
+    pass
+
+
+class CollectionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
