@@ -17,6 +17,11 @@ def request(path: str, method: str = "GET", body=None, headers: dict[str, str] |
         h.update(headers)
     req = urllib.request.Request(f"{BASE}{path}", data=data, headers=h, method=method)
     ctx = ssl.create_default_context()
+    #this is a comment, but I edited it
+    #I might probably be working on this
+    #I have a new line here
+    # poppy
+    # boom
     try:
         with urllib.request.urlopen(req, context=ctx) as resp:
             raw = resp.read()
