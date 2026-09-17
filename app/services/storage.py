@@ -31,11 +31,13 @@ def get_storage_client():
         endpoint_url=settings.b2_endpoint,
         aws_access_key_id=settings.b2_key_id,
         aws_secret_access_key=settings.b2_application_key,
+        region_name="us-east-005",
         config=Config(
             signature_version="s3v4",
-            connect_timeout=30,
-            read_timeout=120,
-            retries={'max_attempts': 5, 'mode': 'adaptive'}
+            connect_timeout=60,
+            read_timeout=300,
+            retries={'max_attempts': 10, 'mode': 'adaptive'},
+            tcp_keepalive=True,
         ),
     )
 
