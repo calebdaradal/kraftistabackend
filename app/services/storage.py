@@ -118,9 +118,10 @@ def upload_bytes(content: bytes, filename: str, folder: str, content_type: str |
             ContentType=mime,
         )
     except (BotoCoreError, ClientError) as exc:
+        error_detail = f"Failed to upload image to B2 storage: {str(exc)}"
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to upload image to B2 storage."
+            detail=error_detail
         ) from exc
     
     return build_b2_uri(object_key)
@@ -141,9 +142,10 @@ def create_signed_url_from_uri(uri: str, expires_in: int | None = None) -> str:
         )
         return url
     except (BotoCoreError, ClientError) as exc:
+        error_detail = f"Failed to create B2 signed URL: {str(exc)}"
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to create B2 signed URL."
+            detail=error_detail
         ) from exc
 
 
