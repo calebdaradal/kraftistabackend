@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.product import Category, Collection, Product, Tag
 from app.schemas.product import ProductCreate, ProductUpdate
 from app.core.config import get_settings
-from app.services.storage import create_signed_url_from_uri, is_data_url, is_b2_uri, upload_data_url
+from app.services.storage import create_signed_url_from_uri, is_b2_uri
 
 
 @dataclass
@@ -122,7 +122,9 @@ def serialize_product(product: Product) -> dict:
         "in_stock": product.in_stock,
         "stock_count": product.stock_count,
         "image_url": _resolve_media(product.image_url),
+        "image_storage_uri": product.image_url if is_b2_uri(product.image_url) else None,
         "gallery_urls": [_resolve_media(item) for item in gallery],
+        "gallery_storage_uris": [item if is_b2_uri(item) else None for item in gallery],
         "tags": [tag.name for tag in product.tags_ref],
         "rating": product.rating,
         "review_count": product.review_count,
@@ -133,8 +135,11 @@ def serialize_product(product: Product) -> dict:
         "materials": product.materials,
         "care_instructions": product.care_instructions,
         "primary_variation": _resolve_variation_media(product.primary_variation),
+        "primary_variation_storage": product.primary_variation,
         "secondary_variation": _resolve_variation_media(product.secondary_variation),
+        "secondary_variation_storage": product.secondary_variation,
         "tertiary_variation": _resolve_variation_media(product.tertiary_variation),
+        "tertiary_variation_storage": product.tertiary_variation,
         "created_at": product.created_at,
         "updated_at": product.updated_at,
     }
@@ -162,10 +167,8 @@ def create_product(db: Session, payload: ProductCreate) -> Product:
     if db.scalar(select(Product).where(Product.sku == payload.sku)) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SKU already exists.")
 
-    # Pre-generate the product ID so we can use it in organised storage paths
-    # before the DB row is inserted.
     product_id = uuid.uuid4()
-    values = _normalize_media_payload(payload.model_dump(), str(product_id))
+    values = payload.model_dump()
     tag_names = values.pop("tags", None)
     category_name = values.pop("category", None)
     collection_name = values.pop("collection", None)
@@ -191,7 +194,7 @@ def get_product_or_404(db: Session, product_id: uuid.UUID) -> Product:
 
 
 def update_product(db: Session, product: Product, payload: ProductUpdate) -> Product:
-    update_data = _normalize_media_payload(payload.model_dump(exclude_unset=True), str(product.id))
+    update_data = payload.model_dump(exclude_unset=True)
     tag_names = update_data.pop("tags", None) if "tags" in update_data else None
     category_name = update_data.pop("category", None) if "category" in update_data else None
     collection_provided = "collection" in update_data
@@ -224,66 +227,6 @@ def list_products(
     return list(db.scalars(query).all())
 
 
-def _normalize_media_payload(data: dict[str, Any], product_id: str) -> dict[str, Any]:
-    """Upload any base64 data-URLs in the payload to organised B2 Storage paths.
-
-    Directory layout inside the B2 bucket::
-
-        products/{product_id}/main/        – primary thumbnail
-        products/{product_id}/gallery/     – gallery images
-        products/{product_id}/variations/{option-slug}/  – per-option design images
-    """
-    settings = get_settings()
-    bucket = settings.b2_bucket_name
-    base = f"products/{product_id}"
-
-    def _persist_image(value: str | None, folder: str) -> str | None:
-        if not isinstance(value, str):
-            return value
-        if is_data_url(value):
-            return upload_data_url(data_url=value, folder=folder)
-        return value
-
-    data["image_url"] = _persist_image(data.get("image_url"), f"{base}/main")
-    if isinstance(data.get("gallery_urls"), list):
-        data["gallery_urls"] = [
-            _persist_image(item, f"{base}/gallery") if isinstance(item, str) else item
-            for item in data["gallery_urls"]
-        ]
-
-    def _walk_variation_media(node: Any) -> Any:
-        """Recursively upload variation option images.
-
-        When the current dict is an *option* (contains both ``label`` and
-        ``image`` keys), the image is stored under
-        ``products/{id}/variations/{slugified-label}/``.
-        """
-        if isinstance(node, list):
-            return [_walk_variation_media(item) for item in node]
-        if isinstance(node, dict):
-            # Derive folder name from the option label if present.
-            raw_label: str = node.get("label", "") if isinstance(node.get("label"), str) else ""
-            opt_slug = _slugify(raw_label) if raw_label else "option"
-            var_folder = f"{base}/variations/{opt_slug}"
-
-            mapped: dict[str, Any] = {}
-            for key, val in node.items():
-                if key == "image" and isinstance(val, str):
-                    mapped[key] = _persist_image(val, var_folder)
-                else:
-                    mapped[key] = _walk_variation_media(val)
-            return mapped
-        return node
-
-    if "primary_variation" in data:
-        data["primary_variation"] = _walk_variation_media(data.get("primary_variation"))
-    if "secondary_variation" in data:
-        data["secondary_variation"] = _walk_variation_media(data.get("secondary_variation"))
-    if "tertiary_variation" in data:
-        data["tertiary_variation"] = _walk_variation_media(data.get("tertiary_variation"))
-    return data
-
-
 def delete_product(db: Session, product: Product) -> None:
     db.delete(product)
     db.commit()
@@ -297,17 +240,6 @@ def list_categories_with_counts(db: Session) -> list[CategoryWithCount]:
         .order_by(Category.name.asc())
     ).all()
     return [CategoryWithCount(category=row[0], product_count=int(row[1])) for row in rows]
-
-
-def _persist_category_image(image_url: str | None, category_id: uuid.UUID) -> str | None:
-    if not isinstance(image_url, str) or not image_url:
-        return image_url
-    if is_data_url(image_url):
-        return upload_data_url(
-            data_url=image_url,
-            folder=f"categories/{category_id}",
-        )
-    return image_url
 
 
 def resolve_category_image(image_url: str | None) -> str | None:
@@ -328,7 +260,7 @@ def create_category(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists.")
     category = Category(name=normalized, slug=_slugify(normalized), description=description)
     category.id = uuid.uuid4()
-    category.image_url = _persist_category_image(image_url, category.id)
+    category.image_url = image_url
     db.add(category)
     db.commit()
     db.refresh(category)
@@ -354,7 +286,7 @@ def update_category(
     category.name = normalized
     category.slug = _slugify(normalized)
     if image_url_set:
-        category.image_url = _persist_category_image(image_url, category.id)
+        category.image_url = image_url
     if description_set:
         category.description = description
     db.commit()

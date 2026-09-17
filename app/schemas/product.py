@@ -2,7 +2,26 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _reject_data_url(value: str) -> str:
+    if value.lstrip().lower().startswith("data:"):
+        raise ValueError("Data URLs are not supported for images.")
+    return value
+
+
+def _reject_data_urls_in_variation(value: object) -> object:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "image" and isinstance(item, str):
+                _reject_data_url(item)
+            else:
+                _reject_data_urls_in_variation(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_data_urls_in_variation(item)
+    return value
 
 
 class ProductBase(BaseModel):
@@ -32,6 +51,21 @@ class ProductBase(BaseModel):
     primary_variation: dict | None = None
     secondary_variation: dict | None = None
     tertiary_variation: dict | None = None
+
+    @field_validator("image_url")
+    @classmethod
+    def reject_image_data_url(cls, value: str | None) -> str | None:
+        return _reject_data_url(value) if value is not None else value
+
+    @field_validator("gallery_urls")
+    @classmethod
+    def reject_gallery_data_urls(cls, value: list[str] | None) -> list[str] | None:
+        return [_reject_data_url(item) for item in value] if value is not None else value
+
+    @field_validator("primary_variation", "secondary_variation", "tertiary_variation")
+    @classmethod
+    def reject_variation_image_data_urls(cls, value: dict | None) -> dict | None:
+        return _reject_data_urls_in_variation(value) if value is not None else value
 
 
 class ProductCreate(ProductBase):
@@ -66,6 +100,21 @@ class ProductUpdate(BaseModel):
     secondary_variation: dict | None = None
     tertiary_variation: dict | None = None
 
+    @field_validator("image_url")
+    @classmethod
+    def reject_image_data_url(cls, value: str | None) -> str | None:
+        return _reject_data_url(value) if value is not None else value
+
+    @field_validator("gallery_urls")
+    @classmethod
+    def reject_gallery_data_urls(cls, value: list[str] | None) -> list[str] | None:
+        return [_reject_data_url(item) for item in value] if value is not None else value
+
+    @field_validator("primary_variation", "secondary_variation", "tertiary_variation")
+    @classmethod
+    def reject_variation_image_data_urls(cls, value: dict | None) -> dict | None:
+        return _reject_data_urls_in_variation(value) if value is not None else value
+
 
 class ProductRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -84,7 +133,9 @@ class ProductRead(BaseModel):
     in_stock: bool
     stock_count: int
     image_url: str | None
+    image_storage_uri: str | None = None
     gallery_urls: list[str] | None
+    gallery_storage_uris: list[str | None] | None = None
     tags: list[str] | None
     rating: Decimal
     review_count: int
@@ -95,8 +146,11 @@ class ProductRead(BaseModel):
     materials: list[str] | None
     care_instructions: list[str] | None
     primary_variation: dict | None
+    primary_variation_storage: dict | None = None
     secondary_variation: dict | None
+    secondary_variation_storage: dict | None = None
     tertiary_variation: dict | None
+    tertiary_variation_storage: dict | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -109,10 +163,20 @@ class CategoryCreate(TaxonomyBase):
     image_url: str | None = None
     description: str | None = None
 
+    @field_validator("image_url")
+    @classmethod
+    def reject_image_data_url(cls, value: str | None) -> str | None:
+        return _reject_data_url(value) if value is not None else value
+
 
 class CategoryUpdate(TaxonomyBase):
     image_url: str | None = None
     description: str | None = None
+
+    @field_validator("image_url")
+    @classmethod
+    def reject_image_data_url(cls, value: str | None) -> str | None:
+        return _reject_data_url(value) if value is not None else value
 
 
 class CategoryRead(BaseModel):
@@ -122,6 +186,7 @@ class CategoryRead(BaseModel):
     name: str
     slug: str
     image_url: str | None = None
+    image_storage_uri: str | None = None
     description: str | None = None
     product_count: int
     created_at: datetime

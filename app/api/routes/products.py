@@ -1,9 +1,10 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.engagement import ProductReview
@@ -24,6 +25,7 @@ from app.schemas.product import (
     TagUpdate,
     TaxonomyDeleteImpact,
 )
+from app.services.storage import create_signed_url_from_uri, upload_bytes
 from app.services.products import (
     count_products_for_category,
     count_products_for_collection,
@@ -50,6 +52,40 @@ from app.services.products import (
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
+MAX_IMAGE_BYTES = 10_000_000
+
+
+def _upload_product_image(file: UploadFile, folder: str) -> dict[str, str]:
+    if not file.filename or not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An image file is required.")
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file.")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Image exceeds the 10MB limit.")
+    storage_uri = upload_bytes(content, file.filename, folder, file.content_type)
+
+    return {
+        "storage_uri": storage_uri,
+        "image_url": create_signed_url_from_uri(storage_uri, get_settings().b2_signed_url_exp_seconds),
+    }
+
+
+@router.post("/media", status_code=status.HTTP_201_CREATED)
+def upload_product_media_endpoint(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict[str, str]:
+    return _upload_product_image(file, "products/uploads")
+
+
+@router.post("/categories/media", status_code=status.HTTP_201_CREATED)
+def upload_category_media_endpoint(
+    file: UploadFile = File(...),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+) -> dict[str, str]:
+    return _upload_product_image(file, "categories/uploads")
 
 
 @router.post("", response_model=ProductRead, status_code=201)
@@ -88,6 +124,7 @@ def list_categories_endpoint(
                 "name": row.category.name,
                 "slug": row.category.slug,
                 "image_url": resolve_category_image(row.category.image_url),
+                "image_storage_uri": row.category.image_url if row.category.image_url and row.category.image_url.startswith("b2://") else None,
                 "description": row.category.description,
                 "product_count": row.product_count,
                 "created_at": row.category.created_at,
@@ -129,6 +166,7 @@ def create_category_endpoint(
             "name": category.name,
             "slug": category.slug,
             "image_url": resolve_category_image(category.image_url),
+            "image_storage_uri": category.image_url if category.image_url and category.image_url.startswith("b2://") else None,
             "description": category.description,
             "product_count": 0,
             "created_at": category.created_at,
@@ -160,6 +198,7 @@ def update_category_endpoint(
             "name": category.name,
             "slug": category.slug,
             "image_url": resolve_category_image(category.image_url),
+            "image_storage_uri": category.image_url if category.image_url and category.image_url.startswith("b2://") else None,
             "description": category.description,
             "product_count": count_products_for_category(db, category_id),
             "created_at": category.created_at,

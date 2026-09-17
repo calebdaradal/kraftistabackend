@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import io
 import mimetypes
 import uuid
@@ -8,7 +7,7 @@ from functools import lru_cache
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, status
 from PIL import Image
 
@@ -39,11 +38,6 @@ def get_storage_client():
             retries={'max_attempts': 3, 'mode': 'standard'}
         ),
     )
-
-
-def is_data_url(value: str | None) -> bool:
-    return bool(value and value.startswith("data:") and ";base64," in value)
-
 
 def is_b2_uri(value: str | None) -> bool:
     return bool(value and value.startswith(B2_URI_PREFIX))
@@ -87,58 +81,12 @@ def _process_image(image_data: bytes) -> tuple[bytes, str]:
             detail="Invalid image data or unsupported format."
         ) from exc
 
-
-def _decode_data_url(data_url: str) -> tuple[bytes, str]:
-    """Decode base64 data URL."""
-    meta, encoded = data_url.split(",", 1)
-    mime = meta.split(";", 1)[0].replace("data:", "") or "application/octet-stream"
-    try:
-        content = base64.b64decode(encoded, validate=True)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid base64 image data."
-        ) from exc
-    return content, mime
-
-
 def _safe_ext_for_mime(mime: str) -> str:
     """Get file extension for MIME type."""
     ext = mimetypes.guess_extension(mime) or ""
     if ext == ".jpe":
         ext = ".jpg"
     return ext
-
-
-def upload_data_url(folder: str, data_url: str) -> str:
-    """Upload image from base64 data URL with processing."""
-    content, mime = _decode_data_url(data_url)
-    
-    # Process image if it's an image type
-    if mime.startswith("image/"):
-        content, mime = _process_image(content)
-    
-    ext = _safe_ext_for_mime(mime)
-    object_key = f"{folder.rstrip('/')}/{uuid.uuid4().hex}{ext}"
-    
-    settings = get_settings()
-    client = get_storage_client()
-    
-    try:
-        client.put_object(
-            Bucket=settings.b2_bucket_name,
-            Key=object_key,
-            Body=content,
-            ContentType=mime,
-        )
-    except ClientError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload to B2: {str(exc)}"
-        ) from exc
-    
-    return build_b2_uri(object_key)
-
 
 def upload_bytes(content: bytes, filename: str, folder: str, content_type: str | None = None) -> str:
     """Upload raw bytes with optional image processing."""
@@ -192,10 +140,10 @@ def create_signed_url_from_uri(uri: str, expires_in: int | None = None) -> str:
             ExpiresIn=expiry,
         )
         return url
-    except ClientError as exc:
+    except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create signed URL: {str(exc)}"
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create B2 signed URL."
         ) from exc
 
 
@@ -208,7 +156,7 @@ def download_bytes_from_uri(uri: str) -> bytes:
     try:
         response = client.get_object(Bucket=settings.b2_bucket_name, Key=object_key)
         return response["Body"].read()
-    except ClientError as exc:
+    except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File not found: {str(exc)}"
