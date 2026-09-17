@@ -7,7 +7,7 @@ from app.core.config import get_settings
 
 
 def _normalize_database_url(raw_url: str) -> str:
-    # Supabase/Render often provide postgresql://; force SQLAlchemy to psycopg driver.
+    # Neon/Render often provide postgresql://; force SQLAlchemy to psycopg driver.
     if raw_url.startswith("postgresql://") and "+psycopg" not in raw_url:
         return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
     if raw_url.startswith("postgres://"):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.product import Category, Collection, Product, Tag
 from app.schemas.product import ProductCreate, ProductUpdate
 from app.core.config import get_settings
-from app.services.storage import create_signed_url_from_uri, is_data_url, is_supabase_uri, upload_data_url
+from app.services.storage import create_signed_url_from_uri, is_data_url, is_b2_uri, upload_data_url
 
 
 @dataclass
@@ -89,8 +89,8 @@ def serialize_product(product: Product) -> dict:
     def _resolve_media(value: str | None) -> str | None:
         if not value:
             return value
-        if is_supabase_uri(value):
-            return create_signed_url_from_uri(value, settings.supabase_signed_url_exp_seconds)
+        if is_b2_uri(value):
+            return create_signed_url_from_uri(value, settings.b2_signed_url_exp_seconds)
         return value
 
     def _resolve_variation_media(node: Any) -> Any:
@@ -225,23 +225,23 @@ def list_products(
 
 
 def _normalize_media_payload(data: dict[str, Any], product_id: str) -> dict[str, Any]:
-    """Upload any base64 data-URLs in the payload to organised Supabase Storage paths.
+    """Upload any base64 data-URLs in the payload to organised B2 Storage paths.
 
-    Directory layout inside the ``product_images`` bucket::
+    Directory layout inside the B2 bucket::
 
         products/{product_id}/main/        – primary thumbnail
         products/{product_id}/gallery/     – gallery images
         products/{product_id}/variations/{option-slug}/  – per-option design images
     """
     settings = get_settings()
-    bucket = settings.supabase_bucket_product_images
+    bucket = settings.b2_bucket_name
     base = f"products/{product_id}"
 
     def _persist_image(value: str | None, folder: str) -> str | None:
         if not isinstance(value, str):
             return value
         if is_data_url(value):
-            return upload_data_url(bucket=bucket, data_url=value, folder=folder)
+            return upload_data_url(data_url=value, folder=folder)
         return value
 
     data["image_url"] = _persist_image(data.get("image_url"), f"{base}/main")
@@ -303,9 +303,7 @@ def _persist_category_image(image_url: str | None, category_id: uuid.UUID) -> st
     if not isinstance(image_url, str) or not image_url:
         return image_url
     if is_data_url(image_url):
-        settings = get_settings()
         return upload_data_url(
-            bucket=settings.supabase_bucket_product_images,
             data_url=image_url,
             folder=f"categories/{category_id}",
         )
@@ -315,9 +313,9 @@ def _persist_category_image(image_url: str | None, category_id: uuid.UUID) -> st
 def resolve_category_image(image_url: str | None) -> str | None:
     if not image_url:
         return image_url
-    if is_supabase_uri(image_url):
+    if is_b2_uri(image_url):
         settings = get_settings()
-        return create_signed_url_from_uri(image_url, settings.supabase_signed_url_exp_seconds)
+        return create_signed_url_from_uri(image_url, settings.b2_signed_url_exp_seconds)
     return image_url
 
 

@@ -19,7 +19,7 @@ from app.schemas.settings import (
     UpsertSiteSettingsRequest,
     WideLogoUploadResponse,
 )
-from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_supabase_uri, upload_bytes
+from app.services.storage import delete_file_from_uri, download_bytes_from_uri, is_b2_uri, upload_bytes
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -132,7 +132,6 @@ def upload_favicon(
 
     settings = get_app_config()
     storage_uri = upload_bytes(
-        bucket=settings.supabase_bucket_web_settings,
         content=content,
         filename=file.filename,
         folder="favicon",
@@ -218,7 +217,6 @@ def upload_logo(
 
     settings = get_app_config()
     storage_uri = upload_bytes(
-        bucket=settings.supabase_bucket_web_settings,
         content=content,
         filename=file.filename,
         folder="logo",
@@ -303,7 +301,7 @@ def get_logo_asset(db: Session = Depends(get_db)) -> Response:
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     data = row.data if row else {}
     logo_path = data.get("logoPath")
-    if not logo_path or not is_supabase_uri(logo_path):
+    if not logo_path or not is_b2_uri(logo_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not configured.")
     content = download_bytes_from_uri(logo_path)
     return Response(
@@ -337,7 +335,6 @@ def upload_wide_logo(
 
     settings = get_app_config()
     storage_uri = upload_bytes(
-        bucket=settings.supabase_bucket_web_settings,
         content=content,
         filename=file.filename,
         folder="logo/wide",
@@ -401,7 +398,7 @@ def get_wide_logo_asset(db: Session = Depends(get_db)) -> Response:
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     data = row.data if row else {}
     logo_path = data.get("wideLogoPath")
-    if not logo_path or not is_supabase_uri(logo_path):
+    if not logo_path or not is_b2_uri(logo_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wide logo not configured.")
     content = download_bytes_from_uri(logo_path)
     return Response(
@@ -416,7 +413,7 @@ def get_favicon_asset(db: Session = Depends(get_db)) -> Response:
     row: SiteSetting | None = db.query(SiteSetting).filter(SiteSetting.key == SETTINGS_KEY).one_or_none()
     data = row.data if row else {}
     favicon_path = data.get("faviconPath")
-    if not favicon_path or not is_supabase_uri(favicon_path):
+    if not favicon_path or not is_b2_uri(favicon_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Favicon not configured.")
     content = download_bytes_from_uri(favicon_path)
     return Response(
