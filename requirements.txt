@@ -10,6 +10,6 @@ python-jose
 python-dotenv
 email-validator
 python-multipart
-boto3
+boto3>=1.35,<2
 Pillow
 websockets>=14.0,<16.0

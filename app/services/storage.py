@@ -95,15 +95,15 @@ def upload_bytes(content: bytes, filename: str, folder: str, content_type: str |
     if not mime:
         mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     
-    # Process image if it's an image type
     if mime.startswith("image/"):
         content, mime = _process_image(content)
-    
-    ext = ""
-    if "." in filename:
-        ext = "." + filename.rsplit(".", 1)[1].lower()
-    if not ext:
-        ext = _safe_ext_for_mime(mime)
+        ext = ".jpg"
+    else:
+        ext = ""
+        if "." in filename:
+            ext = "." + filename.rsplit(".", 1)[1].lower()
+        if not ext:
+            ext = _safe_ext_for_mime(mime)
     
     object_key = f"{folder.rstrip('/')}/{uuid.uuid4().hex}{ext}"
     
@@ -117,10 +117,10 @@ def upload_bytes(content: bytes, filename: str, folder: str, content_type: str |
             Body=content,
             ContentType=mime,
         )
-    except ClientError as exc:
+    except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload to B2: {str(exc)}"
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to upload image to B2 storage."
         ) from exc
     
     return build_b2_uri(object_key)
