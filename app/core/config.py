@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     b2_endpoint: str = "https://s3.us-east-005.backblazeb2.com"
     b2_signed_url_exp_seconds: int = 604800
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache
