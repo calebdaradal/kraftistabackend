@@ -118,6 +118,8 @@ def upload_bytes(content: bytes, filename: str, folder: str, content_type: str |
             Key=object_key,
             Body=content,
             ContentType=mime,
+            CacheControl="public, max-age=31536000, immutable",
+            ContentDisposition="inline",
         )
     except (BotoCoreError, ClientError) as exc:
         error_detail = f"Failed to upload image to B2 storage: {str(exc)}"
@@ -139,7 +141,12 @@ def create_signed_url_from_uri(uri: str, expires_in: int | None = None) -> str:
     try:
         url = client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.b2_bucket_name, "Key": object_key},
+            Params={
+                "Bucket": settings.b2_bucket_name,
+                "Key": object_key,
+                "ResponseCacheControl": "public, max-age=31536000",
+                "ResponseContentDisposition": "inline",
+            },
             ExpiresIn=expiry,
         )
         return url
