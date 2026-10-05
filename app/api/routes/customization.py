@@ -234,7 +234,7 @@ def delete_hero_image(
     if old_uri and is_b2_uri(str(old_uri)):
         delete_file_from_uri(str(old_uri))
     current.pop("image", None)
-    current["imageUrl"] = "/HeaderImage.png"
+    current["imageUrl"] = "/HeaderImage.jpg"
     current.setdefault("imageAlt", "Kraftista handcrafted and personalized gifts")
     _upsert_customization(db, "hero", current, str(current_user.id))
     db.commit()
